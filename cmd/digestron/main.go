@@ -1,17 +1,22 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/skandertajine/digestron/internal/version"
+	"github.com/skandertajine/digestron/internal/cli"
+
+	// Providers register themselves; importing them here decides what ships
+	// in the binary.
+	_ "github.com/skandertajine/digestron/internal/llm/noop"
+	_ "github.com/skandertajine/digestron/internal/llm/ollama"
+	_ "github.com/skandertajine/digestron/internal/llm/openai"
+	_ "github.com/skandertajine/digestron/internal/sink/email"
+	_ "github.com/skandertajine/digestron/internal/sink/homeassistant"
+	_ "github.com/skandertajine/digestron/internal/sink/webhook"
+	_ "github.com/skandertajine/digestron/internal/source/elasticsearch"
+	_ "github.com/skandertajine/digestron/internal/source/prometheus"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(version.String())
-		return
-	}
-	fmt.Fprintln(os.Stderr, "usage: digestron <run|serve|check|version> [flags]")
-	os.Exit(2)
+	os.Exit(cli.Main(os.Args[1:]))
 }

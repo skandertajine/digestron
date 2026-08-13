@@ -22,6 +22,9 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestLoadExample(t *testing.T) {
+	for _, v := range []string{"ES_PASSWORD", "HA_TOKEN", "SMTP_PASSWORD", "HOOK_TOKEN"} {
+		t.Setenv(v, "x")
+	}
 	cfg, err := Load("../../config.example.yaml")
 	if err != nil {
 		t.Fatalf("config.example.yaml must load: %v", err)

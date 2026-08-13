@@ -1,8 +1,8 @@
 # digestron configuration.
 # Any scalar can be overridden via env vars prefixed DIGESTRON_ with "__" as
 # the nesting separator, e.g. DIGESTRON_LLM__TIMEOUT=180s -> llm.timeout.
-# Secrets belong in dollar-brace references (e.g. "$" + "{ES_PASSWORD}"),
-# expanded from the environment at load time.
+# Secrets belong in dollar-brace references (expanded from the environment at
+# load time, as shown below) — never inline in this file.
 
 log:
   level: info # debug | info | warn | error (JSON output)
@@ -11,9 +11,9 @@ digest:
   title: "Security digest"
   window: 1h # time range each run covers
   language: en # language of the LLM summary
-  # context: >
-  #   Optional free text appended to the system prompt, e.g. a short
-  #   description of your infrastructure.
+  context: >
+    Optional free text appended to the system prompt: a short description of
+    your infrastructure helps the model write relevant summaries.
 
 schedule: # serve mode only; ignored by `digestron run`
   cron: "5 * * * *"
@@ -24,15 +24,97 @@ metrics:
   listen: ":9090" # serve mode: /metrics, /healthz and the web UI
 
 history:
-  path: "" # run history file for the web UI; empty disables persistence
+  path: "" # run history file for the web UI; empty keeps it in memory
   keep: 200
 
-sources: []
+sources:
+  - name: es-security
+    type: elasticsearch
+    timeout: 30s
+    settings:
+      url: http://elasticsearch:9200
+      index: "filebeat-*"
+      username: elastic
+      password: ${ES_PASSWORD}
+      queries:
+        # Embedded presets, overridable per query:
+        - preset: fail2ban
+        - preset: ssh_auth
+          severity: { warning: 5, critical: 50 }
+        - preset: app_login_failures
+        - preset: ufw_blocks
+        - preset: nginx_public
+        # Fully custom query; convention: one terms agg named "breakdown".
+        - name: "http 500s"
+          severity: { warning: 1, critical: 20 }
+          body:
+            size: 0
+            query:
+              bool:
+                filter:
+                  - range: { "@timestamp": { gte: "{{.From}}", lte: "{{.To}}" } }
+                  - term: { "http.response.status_code": 500 }
+            aggs:
+              breakdown:
+                terms: { field: "client.ip", size: 10 }
+
+  - name: prom
+    type: prometheus
+    timeout: 15s
+    settings:
+      url: http://prometheus:9090
+      queries:
+        - name: "targets down"
+          query: "count(up == 0) or vector(0)"
+          severity: { warning: 1, critical: 5 }
 
 llm:
-  type: noop # ollama | openai-compatible | noop
-  timeout: 120s
-  retries: 2
-  max_chars: 1500
+  type: ollama # ollama | openai-compatible | noop
+  timeout: 120s # separate from source/sink timeouts; local models start slowly
+  retries: 2 # on rate-limit / unavailable only
+  max_chars: 1500 # hard cap on the summary after post-processing
+  settings:
+    url: http://localhost:11434
+    model: qwen3:8b
+    num_ctx: 8192 # explicit: the server default silently truncates
+    keep_alive: 10m
+    # openai-compatible variant (works with OpenAI, a LiteLLM proxy, vLLM,
+    # LM Studio, Groq, Mistral...):
+    #   url: http://litellm:4000
+    #   api_key: your-key-here # or a dollar-brace env reference
+    #   model: gpt-4o-mini
+    #   max_tokens: 800
+    #   max_tokens_field: max_tokens # or max_completion_tokens
+    #   temperature: 0.2
+    #   extra: { top_p: 0.9 } # merged verbatim into the request body
 
-sinks: []
+sinks:
+  - name: iphone
+    type: homeassistant
+    settings:
+      url: http://homeassistant:8123
+      token: ${HA_TOKEN} # sent as a Bearer header, never in the URL
+      service: mobile_app_iphone
+      # template: "{{ .Verdict }} — {{ .Summary }}" # optional message override
+
+  - name: mail
+    type: email
+    settings:
+      host: smtp.example.com
+      port: 587
+      username: digest@example.com
+      password: ${SMTP_PASSWORD}
+      from: digest@example.com
+      to: [ops@example.com]
+      # subject: "[{{.Verdict}}] {{.Title}}" # optional template
+      # tls: opportunistic # mandatory | opportunistic | none
+
+  - name: audit-hook
+    type: webhook
+    settings:
+      url: https://hooks.example.com/digest
+      method: POST
+      headers:
+        Authorization: "Bearer ${HOOK_TOKEN}"
+      # body defaults to the full report as JSON; override with a template:
+      # body: '{"text": {{ printf "%q" (rendertext .) }}}'
