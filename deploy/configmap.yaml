@@ -1,0 +1,55 @@
+# Example configuration mounted into the container. Adapt sources, llm and
+# sinks to your stack; secrets stay in Kubernetes Secrets, referenced through
+# the environment (see cronjob.yaml / deployment.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: digestron-config
+data:
+  config.yaml: |
+    digest:
+      title: "Security digest"
+      window: 1h
+      language: en
+
+    schedule:
+      cron: "5 * * * *"
+      timezone: "Europe/Paris"
+
+    metrics:
+      listen: ":9090"
+
+    history:
+      path: /data/history.json
+      keep: 200
+
+    sources:
+      - name: es-security
+        type: elasticsearch
+        settings:
+          url: http://elasticsearch.elasticsearch.svc.cluster.local:9200
+          index: "filebeat-*"
+          username: elastic
+          password: ${ES_PASSWORD}
+          queries:
+            - preset: fail2ban
+            - preset: ssh_auth
+            - preset: app_login_failures
+            - preset: ufw_blocks
+            - preset: nginx_public
+
+    llm:
+      type: ollama
+      timeout: 120s
+      settings:
+        url: http://ollama.example.lan:11434
+        model: qwen3:8b
+        num_ctx: 8192
+
+    sinks:
+      - name: phone
+        type: homeassistant
+        settings:
+          url: http://home-assistant.home-assistant.svc.cluster.local:8123
+          token: ${HA_TOKEN}
+          service: mobile_app_iphone

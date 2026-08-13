@@ -1,0 +1,50 @@
+# One-shot mode: a Kubernetes CronJob runs `digestron run` on schedule. A
+# non-zero exit marks the Job failed, so kube-state-metrics
+# (kube_job_status_failed, kube_cronjob_status_last_successful_time) covers
+# alerting without any push gateway.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: digestron
+spec:
+  schedule: "5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: digestron
+              image: ghcr.io/skandertajine/digestron:latest
+              args: ["run", "-config", "/etc/digestron/config.yaml"]
+              env:
+                - name: ES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: elasticsearch-credentials
+                      key: elastic-password
+                - name: HA_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: ha-notify-token
+                      key: token
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/digestron
+                  readOnly: true
+              resources:
+                requests:
+                  memory: 32Mi
+                  cpu: 50m
+                limits:
+                  memory: 128Mi
+                  cpu: 500m
+          volumes:
+            - name: config
+              configMap:
+                name: digestron-config
