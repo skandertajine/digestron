@@ -22,6 +22,8 @@ func Main(args []string) int {
 		return runCmd(args[1:])
 	case "check":
 		return checkCmd(args[1:])
+	case "serve":
+		return serveCmd(args[1:])
 	case "version":
 		fmt.Println(version.String())
 		return 0
@@ -36,6 +38,7 @@ func usage() {
 
 commands:
   run      collect, summarize and deliver one digest, then exit
+  serve    run on a cron schedule, with /metrics and the web UI
   check    probe every configured module and report connectivity
   version  print build information
 `)
