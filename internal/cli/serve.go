@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/skandertajine/digestron/internal/web"
 )
 
 func serveCmd(args []string) int {
@@ -69,6 +71,7 @@ func serveCmd(args []string) int {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	web.Register(mux, app.Store)
 
 	server := &http.Server{
 		Addr:              app.Cfg.Metrics.Listen,

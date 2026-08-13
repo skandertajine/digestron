@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>digestron</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --border: #262d38; --text: #d7dde6;
+    --muted: #8b95a5; --info: #3b82f6; --warning: #f59e0b; --critical: #ef4444;
+    --ok: #22c55e;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 1.5rem; }
+  h1 { font-size: 1.2rem; margin-bottom: .25rem; }
+  h1 span { color: var(--muted); font-weight: normal; font-size: .85rem; margin-left: .75rem; }
+  h2 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  th, td { padding: .45rem .7rem; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: normal; font-size: .8rem; }
+  tr:last-child td { border-bottom: none; }
+  #runs tbody tr { cursor: pointer; }
+  #runs tbody tr:hover { background: #1c2330; }
+  #runs tbody tr.selected { background: #20304a; }
+  .badge { padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; color: #0b0e13; font-weight: bold; }
+  .badge.info { background: var(--info); }
+  .badge.warning { background: var(--warning); }
+  .badge.critical { background: var(--critical); }
+  .fail { color: var(--critical); }
+  .ok { color: var(--ok); }
+  .muted { color: var(--muted); }
+  #detail { display: none; margin-top: 1.5rem; }
+  .summary-box { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: 6px; padding: .8rem 1rem; white-space: pre-wrap; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  .wrap { white-space: normal; word-break: break-word; }
+  #totals { color: var(--muted); font-size: .85rem; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<h1>digestron <span id="subtitle">run history</span></h1>
+<div id="totals"></div>
+
+<table id="runs">
+  <thead><tr>
+    <th>time</th><th>verdict</th><th>findings</th><th>sources</th><th>sinks</th>
+    <th>model</th><th>tokens in/out</th><th>llm</th><th class="wrap">summary</th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+
+<div id="detail">
+  <h2 id="detail-title"></h2>
+  <div class="summary-box" id="detail-summary"></div>
+
+  <h2>findings (received)</h2>
+  <table><thead><tr><th>severity</th><th>source</th><th>finding</th><th>count</th><th class="wrap">breakdown</th></tr></thead>
+  <tbody id="detail-findings"></tbody></table>
+
+  <div class="cols">
+    <div>
+      <h2>sources</h2>
+      <table><thead><tr><th>source</th><th>findings</th><th>duration</th><th class="wrap">error</th></tr></thead>
+      <tbody id="detail-sources"></tbody></table>
+    </div>
+    <div>
+      <h2>sinks (sent)</h2>
+      <table><thead><tr><th>sink</th><th>duration</th><th class="wrap">error</th></tr></thead>
+      <tbody id="detail-sinks"></tbody></table>
+    </div>
+  </div>
+
+  <h2>llm</h2>
+  <table><thead><tr><th>provider</th><th>model</th><th>prompt tokens</th><th>completion tokens</th><th>duration</th><th class="wrap">error</th></tr></thead>
+  <tbody id="detail-llm"></tbody></table>
+</div>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const badge = v => `<span class="badge ${esc(v)}">${esc(v)}</span>`;
+const ms = n => n >= 1000 ? (n / 1000).toFixed(1) + "s" : n + "ms";
+const nsToMs = n => Math.round((n || 0) / 1e6);
+let selected = null;
+
+async function refresh() {
+  const runs = await (await fetch("api/runs")).json();
+  const rows = runs.map(r => `
+    <tr data-id="${esc(r.id)}" class="${r.id === selected ? "selected" : ""}">
+      <td>${esc(new Date(r.generated_at).toLocaleString())}</td>
+      <td>${badge(r.verdict)}</td>
+      <td>${r.findings}</td>
+      <td class="${r.sources_failed ? "fail" : "ok"}">${r.sources_failed ? r.sources_failed + " failed" : "ok"}</td>
+      <td class="${r.sinks_failed ? "fail" : "ok"}">${r.sinks_failed ? r.sinks_failed + " failed" : "ok"}</td>
+      <td class="muted">${esc(r.model || "—")}</td>
+      <td>${r.prompt_tokens || 0} / ${r.completion_tokens || 0}</td>
+      <td class="muted">${r.llm_ms ? ms(r.llm_ms) : "—"}</td>
+      <td class="wrap muted">${esc((r.summary || "").slice(0, 120))}</td>
+    </tr>`).join("");
+  document.querySelector("#runs tbody").innerHTML =
+    rows || `<tr><td colspan="9" class="muted">no runs yet — waiting for the first digest</td></tr>`;
+
+  const tokens = runs.reduce((a, r) => a + (r.prompt_tokens || 0) + (r.completion_tokens || 0), 0);
+  document.getElementById("totals").textContent =
+    `${runs.length} runs kept — ${tokens.toLocaleString()} tokens total`;
+
+  document.querySelectorAll("#runs tbody tr[data-id]").forEach(tr =>
+    tr.addEventListener("click", () => show(tr.dataset.id)));
+}
+
+async function show(id) {
+  selected = id;
+  const resp = await fetch("api/runs/" + encodeURIComponent(id));
+  if (!resp.ok) return;
+  const { report: r } = await resp.json();
+
+  document.getElementById("detail").style.display = "block";
+  document.getElementById("detail-title").innerHTML =
+    `${badge(r.verdict)} ${esc(r.title)} — ${esc(new Date(r.generated_at).toLocaleString())}`;
+  document.getElementById("detail-summary").textContent =
+    r.summary || "(no LLM summary — raw digest was delivered)";
+
+  document.getElementById("detail-findings").innerHTML = (r.findings || []).map(f => `
+    <tr><td>${badge(f.severity)}</td><td class="muted">${esc(f.source)}</td>
+    <td>${esc(f.title)}</td><td>${f.count}</td>
+    <td class="wrap muted">${esc(Object.entries(f.details || {}).sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}=${v}`).join(", "))}</td></tr>`).join("")
+    || `<tr><td colspan="5" class="muted">none</td></tr>`;
+
+  document.getElementById("detail-sources").innerHTML = (r.stats || []).map(s => `
+    <tr><td>${esc(s.source)}</td><td>${s.findings}</td><td>${ms(nsToMs(s.duration))}</td>
+    <td class="wrap ${s.error ? "fail" : "ok"}">${esc(s.error || "ok")}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="muted">none</td></tr>`;
+
+  document.getElementById("detail-sinks").innerHTML = (r.sinks || []).map(s => `
+    <tr><td>${esc(s.sink)}</td><td>${ms(nsToMs(s.duration))}</td>
+    <td class="wrap ${s.error ? "fail" : "ok"}">${esc(s.error || "sent")}</td></tr>`).join("")
+    || `<tr><td colspan="3" class="muted">none</td></tr>`;
+
+  const l = r.llm || {};
+  document.getElementById("detail-llm").innerHTML = l.provider ? `
+    <tr><td>${esc(l.provider)}</td><td>${esc(l.model || "—")}</td>
+    <td>${l.prompt_tokens || 0}</td><td>${l.completion_tokens || 0}</td>
+    <td>${ms(nsToMs(l.duration))}</td>
+    <td class="wrap ${l.error ? "fail" : "ok"}">${esc(l.error || "ok")}</td></tr>`
+    : `<tr><td colspan="6" class="muted">llm disabled for this run</td></tr>`;
+
+  refresh();
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
