@@ -1,0 +1,38 @@
+# digestron configuration.
+# Any scalar can be overridden via env vars prefixed DIGESTRON_ with "__" as
+# the nesting separator, e.g. DIGESTRON_LLM__TIMEOUT=180s -> llm.timeout.
+# Secrets belong in dollar-brace references (e.g. "$" + "{ES_PASSWORD}"),
+# expanded from the environment at load time.
+
+log:
+  level: info # debug | info | warn | error (JSON output)
+
+digest:
+  title: "Security digest"
+  window: 1h # time range each run covers
+  language: en # language of the LLM summary
+  # context: >
+  #   Optional free text appended to the system prompt, e.g. a short
+  #   description of your infrastructure.
+
+schedule: # serve mode only; ignored by `digestron run`
+  cron: "5 * * * *"
+  timezone: "Europe/Paris"
+  run_on_start: false
+
+metrics:
+  listen: ":9090" # serve mode: /metrics, /healthz and the web UI
+
+history:
+  path: "" # run history file for the web UI; empty disables persistence
+  keep: 200
+
+sources: []
+
+llm:
+  type: noop # ollama | openai-compatible | noop
+  timeout: 120s
+  retries: 2
+  max_chars: 1500
+
+sinks: []
