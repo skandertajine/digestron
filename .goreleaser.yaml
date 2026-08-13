@@ -1,0 +1,36 @@
+version: 2
+
+builds:
+  - main: ./cmd/digestron
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/skandertajine/digestron/internal/version.Version={{.Version}}
+      - -X github.com/skandertajine/digestron/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/skandertajine/digestron/internal/version.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - config.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test"
+      - "^ci"
