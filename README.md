@@ -3,12 +3,14 @@
 Drowning in logs and metrics? Copy-pasting them into a chatbot to figure out
 what happened tonight? That's digestron's job.
 
-digestron **pulls** security data from your existing stack (Elasticsearch,
-Prometheus), aggregates it deterministically, has your **LLM** — local Ollama
-or any OpenAI-compatible API — write a short plain-language summary, and
-**delivers** it to your notification channels (Home Assistant, email, any
-webhook), on schedule. One static binary, YAML configuration, Prometheus
-metrics, a built-in web UI showing every run and its token cost.
+digestron **pulls** whatever matters from your existing stack — security
+events, logs, metrics, any signal Elasticsearch or Prometheus can count —
+aggregates it deterministically, has your **LLM** (local Ollama or any
+OpenAI-compatible API) write a short plain-language summary, and **delivers**
+it to your notification channels (Home Assistant, email, any webhook), on
+schedule. Security digest, nightly ops report, error-budget recap: if you can
+query it, digestron can digest it. One static binary, YAML configuration,
+Prometheus metrics, a built-in web UI showing every run and its token cost.
 
 What it is **not**: a SIEM, a SOC platform, a chat agent. It reads, it never
 remediates. Severities are computed in code from thresholds you set — the LLM
