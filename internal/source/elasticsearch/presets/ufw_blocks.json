@@ -1,0 +1,15 @@
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
+        {"term": {"ufw.action": "BLOCK"}}
+      ],
+      "must_not": [
+        {"terms": {"destination.ip": ["224.0.0.0/4", "ff02::/16", "255.255.255.255"]}}
+      ]
+    }
+  },
+  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+}

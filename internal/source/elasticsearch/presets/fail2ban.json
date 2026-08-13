@@ -1,0 +1,13 @@
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
+        {"term": {"source_text": "pi-fail2ban"}},
+        {"term": {"fail2ban.action": "Ban"}}
+      ]
+    }
+  },
+  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+}

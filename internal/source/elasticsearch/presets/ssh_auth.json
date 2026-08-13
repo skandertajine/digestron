@@ -1,0 +1,13 @@
+{
+  "size": 0,
+  "query": {
+    "bool": {
+      "filter": [
+        {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
+        {"exists": {"field": "ssh.auth_method"}},
+        {"term": {"event.outcome": "failure"}}
+      ]
+    }
+  },
+  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+}
