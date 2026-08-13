@@ -1,13 +1,14 @@
 # digestron
 
-The cron + LLM between your monitoring stack and your phone.
+Drowning in logs and metrics? Copy-pasting them into a chatbot to figure out
+what happened tonight? That's digestron's job.
 
 digestron **pulls** security data from your existing stack (Elasticsearch,
-Prometheus), aggregates it deterministically, has a local or remote **LLM**
-write a short plain-language summary, and **delivers** it to your notification
-channels (Home Assistant, email, any webhook). One static binary, YAML
-configuration, Prometheus metrics, a built-in web UI showing every run and its
-token cost.
+Prometheus), aggregates it deterministically, has your **LLM** — local Ollama
+or any OpenAI-compatible API — write a short plain-language summary, and
+**delivers** it to your notification channels (Home Assistant, email, any
+webhook), on schedule. One static binary, YAML configuration, Prometheus
+metrics, a built-in web UI showing every run and its token cost.
 
 What it is **not**: a SIEM, a SOC platform, a chat agent. It reads, it never
 remediates. Severities are computed in code from thresholds you set — the LLM
