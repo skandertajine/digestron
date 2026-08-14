@@ -1,0 +1,72 @@
+# Homelab dev environment. Image tag is bumped automatically by
+# .github/workflows/deploy-dev.yml on every push to the dev branch —
+# don't edit the tag by hand, it gets overwritten.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: digestron
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: digestron
+  template:
+    metadata:
+      labels:
+        app: digestron
+    spec:
+      containers:
+        - name: digestron
+          image: ghcr.io/skandertajine/digestron:dev
+          args: ["serve", "-config", "/etc/digestron/config.yaml"]
+          ports:
+            - containerPort: 9090
+              name: http
+          env:
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: elastic-password
+            - name: HA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ha-notify-token
+                  key: token
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/digestron
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 50m
+            limits:
+              memory: 128Mi
+              cpu: 500m
+      volumes:
+        - name: config
+          configMap:
+            name: digestron-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: digestron
+  labels:
+    app: digestron
+spec:
+  selector:
+    app: digestron
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
