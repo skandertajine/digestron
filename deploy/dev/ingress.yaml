@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: digestron-ingress
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: digestron-dev.home
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: digestron
+            port:
+              number: 9090
