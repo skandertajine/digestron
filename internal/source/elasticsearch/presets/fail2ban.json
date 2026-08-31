@@ -9,5 +9,5 @@
       ]
     }
   },
-  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+  "aggs": {"breakdown": {"terms": {"field": "client.ip.keyword", "size": 10}}}
 }
