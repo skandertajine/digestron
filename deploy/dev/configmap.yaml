@@ -40,8 +40,9 @@ data:
       timeout: 120s
       settings:
         url: http://192.168.0.156:9401
-        model: qwen3:8b
-        num_ctx: 8192
+        model: qwen3.5:9b
+        num_ctx: 16384
+        keep_alive: -1
 
     sinks:
       - name: phone
