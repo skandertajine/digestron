@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: digestron
-          image: ghcr.io/skandertajine/digestron:dev-c783eda
+          image: ghcr.io/skandertajine/digestron:dev-41e193c
           args: ["serve", "-config", "/etc/digestron/config.yaml"]
           ports:
             - containerPort: 9090
