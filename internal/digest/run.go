@@ -78,9 +78,11 @@ func (r *Runner) collect(ctx context.Context, w Window) ([]Finding, []SourceStat
 			findings, err := src.Collect(cctx, w)
 			stats := SourceStats{Source: src.Name(), Findings: len(findings), Duration: time.Since(start)}
 			if err != nil {
+				// A source may fail and still hand back findings (some of its
+				// queries worked). Keep them: half a digest beats none, as
+				// long as the error travels with them.
 				stats.Err = err.Error()
-				findings = nil
-				r.Log.Error("source failed", "source", src.Name(), "error", err)
+				r.Log.Error("source failed", "source", src.Name(), "findings", len(findings), "error", err)
 			}
 			results[i] = result{stats: stats, findings: findings}
 		}(i, src)

@@ -2,7 +2,9 @@ package digest
 
 import "context"
 
-// Source pulls security-relevant data for a time window.
+// Source pulls security-relevant data for a time window. Collect may return
+// findings and a non-nil error together: a source made of several queries
+// reports what it got plus what it lost, and the runner keeps both.
 type Source interface {
 	Name() string
 	Collect(ctx context.Context, w Window) ([]Finding, error)

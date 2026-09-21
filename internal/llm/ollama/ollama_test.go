@@ -42,7 +42,8 @@ func TestCompleteRequestShape(t *testing.T) {
 		t.Error("stream must be explicitly false, or the response is NDJSON")
 	}
 	if got["think"] != false {
-		t.Error("think must be explicitly false")
+		t.Error("think must be explicitly false by default: a reasoning model " +
+			"spends the whole num_predict budget on its trace and returns empty content")
 	}
 	if got["keep_alive"] != "10m" {
 		t.Errorf("keep_alive = %v", got["keep_alive"])
@@ -118,5 +119,28 @@ func TestCheckVerifiesModelPresence(t *testing.T) {
 func TestNewRequiresModel(t *testing.T) {
 	if _, err := New(map[string]any{"url": "http://x"}); err == nil {
 		t.Error("model is required")
+	}
+}
+
+// Off by default, but the operator keeps the switch: a model that only
+// answers well with a trace is a configuration problem, not a code change.
+func TestThinkIsOverridable(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		_, _ = w.Write([]byte(`{"message":{"content":"all quiet"},"done_reason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(map[string]any{"url": srv.URL, "model": "qwen3:8b", "think": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Complete(context.Background(), digest.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got["think"] != true {
+		t.Errorf("think = %v, want true when the operator asks for it", got["think"])
 	}
 }

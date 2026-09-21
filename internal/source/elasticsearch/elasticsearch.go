@@ -2,6 +2,10 @@
 // OpenSearch cluster. Each configured query yields one Finding: hits.total
 // becomes the count, and by convention a single terms aggregation named
 // "breakdown" becomes the detail map.
+//
+// A count is only reported when the cluster says it is complete: a timeout, a
+// failed shard or a truncated hits.total all turn the query into a named
+// failure instead of a number that reads like a fact.
 package elasticsearch
 
 import (
@@ -123,16 +127,21 @@ func resolve(qc QueryConfig) (query, error) {
 
 func (s *Source) Name() string { return s.name }
 
+// Collect runs every query even after one fails: a rejected body on one query
+// must not blind the other four. Failures come back as an error alongside the
+// findings that did succeed, so the run is partial and says so.
 func (s *Source) Collect(ctx context.Context, w digest.Window) ([]digest.Finding, error) {
 	findings := make([]digest.Finding, 0, len(s.queries))
+	var errs []error
 	for _, q := range s.queries {
 		f, err := s.run(ctx, q, w)
 		if err != nil {
-			return nil, fmt.Errorf("query %q: %w", q.title, err)
+			errs = append(errs, fmt.Errorf("query %q: %w", q.title, err))
+			continue
 		}
 		findings = append(findings, f)
 	}
-	return findings, nil
+	return findings, source.QueryErrors(len(s.queries), errs)
 }
 
 func (s *Source) run(ctx context.Context, q query, w digest.Window) (digest.Finding, error) {
@@ -168,6 +177,24 @@ func (s *Source) run(ctx context.Context, q query, w digest.Window) (digest.Find
 	var out esResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return digest.Finding{}, err
+	}
+	// A _search that timed out or lost shards still answers 200 with a body
+	// full of plausible partial results. Reporting that count as a fact is
+	// the failure this whole source guards against, so the query is treated
+	// as failed: a named gap beats a number that is quietly too small.
+	if out.TimedOut {
+		return digest.Finding{}, fmt.Errorf("elasticsearch: search timed out, the count would be an undercount")
+	}
+	if out.Shards.Failed > 0 {
+		return digest.Finding{}, fmt.Errorf("elasticsearch: %d of %d shards failed, the count would be an undercount",
+			out.Shards.Failed, out.Shards.Total)
+	}
+	// hits.total stops counting at 10000 unless the body sets
+	// "track_total_hits": true, and says so with relation "gte". The embedded
+	// presets set it; a custom query that does not must not pass a ceiling
+	// off as a measurement — on a busy hour that is exactly 10000 every time.
+	if rel := out.Hits.Total.Relation; rel != "" && rel != "eq" {
+		return digest.Finding{}, fmt.Errorf("elasticsearch: hits.total is a lower bound (relation %q): set \"track_total_hits\": true in the query body", rel)
 	}
 
 	f := digest.Finding{
@@ -207,9 +234,19 @@ func (s *Source) Check(ctx context.Context) error {
 }
 
 type esResponse struct {
+	// TimedOut and Shards carry the partial-failure signal: a _search that
+	// gave up on a shard returns 200 with results from the rest.
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
 	Hits struct {
 		Total struct {
 			Value int `json:"value"`
+			// Relation is "eq" for a real count, "gte" for the 10000 ceiling.
+			Relation string `json:"relation"`
 		} `json:"total"`
 	} `json:"hits"`
 	Aggregations struct {

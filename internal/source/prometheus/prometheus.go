@@ -1,6 +1,8 @@
 // Package prometheus pulls counts from a Prometheus-compatible API. Each
 // configured query yields one Finding: the summed sample values become the
-// count, one detail entry per series. Instant queries are evaluated at the
+// count, one detail entry per series. A query the server answers with
+// warnings served incomplete data, so it is reported as a failure rather than
+// as a count. Instant queries are evaluated at the
 // end of the window — pair them with increase()/rate() over the window
 // duration. Range queries take the last sample of each series.
 package prometheus
@@ -9,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -73,20 +76,36 @@ func New(name string, settings map[string]any) (digest.Source, error) {
 
 func (s *Source) Name() string { return s.name }
 
+// Collect runs every query even after one fails, like the elasticsearch
+// source: failures come back as an error alongside the findings that did
+// succeed, so a single bad PromQL expression costs one finding, not the run.
 func (s *Source) Collect(ctx context.Context, w digest.Window) ([]digest.Finding, error) {
 	findings := make([]digest.Finding, 0, len(s.queries))
+	var errs []error
 	for _, q := range s.queries {
 		var (
-			value model.Value
-			err   error
+			value    model.Value
+			warnings v1.Warnings
+			err      error
 		)
 		if q.Range {
-			value, _, err = s.api.QueryRange(ctx, q.Query, v1.Range{Start: w.From, End: w.To, Step: q.Step})
+			value, warnings, err = s.api.QueryRange(ctx, q.Query, v1.Range{Start: w.From, End: w.To, Step: q.Step})
 		} else {
-			value, _, err = s.api.Query(ctx, q.Query, w.To)
+			value, warnings, err = s.api.Query(ctx, q.Query, w.To)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("query %q: %w", q.Name, err)
+			errs = append(errs, fmt.Errorf("query %q: %w", q.Name, err))
+			continue
+		}
+		// Prometheus answers 200 with warnings when it served the query from
+		// incomplete data — a remote-read backend that did not respond, a
+		// series limit hit. The result is a genuine undercount, so it is
+		// named rather than counted, exactly as a failed shard is on the
+		// elasticsearch side.
+		if len(warnings) > 0 {
+			errs = append(errs, fmt.Errorf("query %q: prometheus returned a partial result: %s",
+				q.Name, strings.Join(warnings, "; ")))
+			continue
 		}
 
 		count, details := flatten(value)
@@ -98,7 +117,7 @@ func (s *Source) Collect(ctx context.Context, w digest.Window) ([]digest.Finding
 			Details:  details,
 		})
 	}
-	return findings, nil
+	return findings, source.QueryErrors(len(s.queries), errs)
 }
 
 // flatten reduces any Prometheus result type to a count and a per-series

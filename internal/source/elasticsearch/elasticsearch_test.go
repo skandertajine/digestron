@@ -136,3 +136,137 @@ func TestNewValidation(t *testing.T) {
 		})
 	}
 }
+
+func settingsWithTwoQueries(url string) map[string]any {
+	query := func(name, marker string) map[string]any {
+		return map[string]any{
+			"name": name,
+			"body": map[string]any{
+				"size": 0,
+				"query": map[string]any{"bool": map[string]any{"filter": []any{
+					map[string]any{"range": map[string]any{"@timestamp": map[string]any{"gte": "{{.From}}", "lte": "{{.To}}"}}},
+					map[string]any{"term": map[string]any{"tag": marker}},
+				}}},
+			},
+		}
+	}
+	return map[string]any{
+		"url":     url,
+		"index":   "logs-*",
+		"queries": []any{query("ssh auth failures", "rejected"), query("firewall blocked flows", "accepted")},
+	}
+}
+
+// A body Elasticsearch rejects must cost its own finding and nothing else.
+// The first query failing used to abort the source, so the blocked flows the
+// second one counts never reached the digest at all.
+func TestCollectPartialFailure(t *testing.T) {
+	var ran int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran++
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "rejected") {
+			http.Error(w, `{"error":{"type":"query_shard_exception"}}`, http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"hits": {"total": {"value": 936}}}`))
+	}))
+	defer srv.Close()
+
+	src, err := New("es-test", settingsWithTwoQueries(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := src.Collect(context.Background(), digest.Window{})
+
+	if ran != 2 {
+		t.Errorf("queries executed = %d, want 2: one failure must not skip the rest", ran)
+	}
+	if len(findings) != 1 || findings[0].Title != "firewall blocked flows" || findings[0].Count != 936 {
+		t.Fatalf("findings = %+v, want the surviving query's", findings)
+	}
+	if err == nil {
+		t.Fatal("a failed query must not be silent")
+	}
+	if !strings.Contains(err.Error(), "1 of 2 queries failed") ||
+		!strings.Contains(err.Error(), "ssh auth failures") {
+		t.Errorf("error must name the count and the query: %v", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error must stay on one line, it is rendered into the digest: %q", err)
+	}
+}
+
+// Elasticsearch answers 200 with partial results when it gives up on a shard
+// or runs out of time, and when hits.total hits its 10000 ceiling. Each one
+// yields a number that looks like a measurement and is not one — the count
+// has to be refused, not quietly reported.
+func TestCollectRefusesUntrustworthyCounts(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			"timed out",
+			`{"timed_out": true, "_shards": {"total": 3, "successful": 3, "failed": 0}, "hits": {"total": {"value": 12, "relation": "eq"}}}`,
+			"timed out",
+		},
+		{
+			"shard failed",
+			`{"timed_out": false, "_shards": {"total": 3, "successful": 2, "failed": 1}, "hits": {"total": {"value": 12, "relation": "eq"}}}`,
+			"1 of 3 shards failed",
+		},
+		{
+			"hits.total truncated at the default ceiling",
+			`{"timed_out": false, "_shards": {"total": 1, "successful": 1, "failed": 0}, "hits": {"total": {"value": 10000, "relation": "gte"}}}`,
+			"track_total_hits",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			src, err := New("es-test", settingsWithCustomQuery(srv.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			findings, err := src.Collect(context.Background(), digest.Window{})
+
+			if len(findings) != 0 {
+				t.Errorf("findings = %+v, want none: an undercount reported as a fact is worse than a gap", findings)
+			}
+			if err == nil {
+				t.Fatalf("a partial response must not pass for a complete one")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// The ordinary case must stay ordinary: a complete response says so, and an
+// older server that omits hits.total.relation is not treated as truncated.
+func TestCollectAcceptsCompleteResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"timed_out": false, "_shards": {"total": 1, "successful": 1, "failed": 0},
+			"hits": {"total": {"value": 7}}}`))
+	}))
+	defer srv.Close()
+
+	src, err := New("es-test", settingsWithCustomQuery(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := src.Collect(context.Background(), digest.Window{})
+	if err != nil {
+		t.Fatalf("Collect() = %v, want no error", err)
+	}
+	if len(findings) != 1 || findings[0].Count != 7 {
+		t.Errorf("findings = %+v, want one count of 7", findings)
+	}
+}

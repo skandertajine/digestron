@@ -71,6 +71,11 @@ type SourceStats struct {
 	Err      string        `json:"error,omitempty"`
 }
 
+// Partial reports a source that failed yet still delivered findings: some of
+// its queries answered and some did not. Derived rather than stored, so the
+// run history written by older versions keeps the same meaning.
+func (s SourceStats) Partial() bool { return s.Err != "" && s.Findings > 0 }
+
 // LLMStats records the summarization cost of one run.
 type LLMStats struct {
 	Provider         string        `json:"provider,omitempty"`

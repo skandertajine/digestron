@@ -1,13 +1,14 @@
 {
   "size": 0,
+  "track_total_hits": true,
   "query": {
     "bool": {
       "filter": [
         {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
-        {"term": {"source_text": "pi-nginx"}},
+        {"term": {"source.keyword": "pi-nginx"}},
         {"range": {"http.response.status_code": {"gte": 400}}}
       ]
     }
   },
-  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+  "aggs": {"breakdown": {"terms": {"field": "client.ip.keyword", "size": 10}}}
 }

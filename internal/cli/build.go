@@ -99,7 +99,14 @@ func timeoutOr(d time.Duration) time.Duration {
 }
 
 // Record translates a finished report into metrics. Success means: at least
-// one source answered and every sink delivered — a failed LLM only degrades.
+// one source produced findings and every sink delivered — a failed LLM only
+// degrades.
+//
+// A source that lost some queries but still delivered findings counts as a
+// success here, recorded under status="partial". The run it produced is a
+// real digest and the operator already has it on their phone; exiting
+// non-zero would only make Kubernetes rerun the CronJob (backoffLimit 1,
+// restartPolicy Never) and push the same window a second time.
 func (a *App) Record(r digest.Report, wall time.Duration) (success bool) {
 	a.Metrics.LastRunTimestamp.Set(float64(r.GeneratedAt.Unix()))
 	a.Metrics.RunDuration.Observe(wall.Seconds())
@@ -108,7 +115,12 @@ func (a *App) Record(r digest.Report, wall time.Duration) (success bool) {
 	for _, st := range r.Stats {
 		a.Metrics.ModuleDuration.WithLabelValues(st.Source).Observe(st.Duration.Seconds())
 		status := "success"
-		if st.Err != "" {
+		switch {
+		case st.Partial():
+			// Visible in metrics — alert on it if you want — but not a
+			// failed run: the digest went out with the counts that survived.
+			status = "partial"
+		case st.Err != "":
 			status = "error"
 			sourcesFailed++
 		}

@@ -104,3 +104,36 @@ func TestNewValidation(t *testing.T) {
 		t.Error("invalid template must fail at build time")
 	}
 }
+
+// A body template built from {{.Summary}} — the common case for Slack or
+// ntfy — has no way to know the run was incomplete unless the sink hands it
+// one.
+func TestBodyTemplateCanReportSourceProblems(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s, err := New("hook", map[string]any{
+		"url":  srv.URL,
+		"body": `{"text": "{{.Summary}} — {{sourceproblems .}}"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := digest.Report{
+		Summary: "quiet hour",
+		Stats: []digest.SourceStats{
+			{Source: "es", Findings: 4, Err: "1 of 5 queries failed"},
+		},
+	}
+	if err := s.Send(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Partial sources: es: 1 of 5 queries failed") {
+		t.Errorf("body = %q, want the incomplete run named", got)
+	}
+}

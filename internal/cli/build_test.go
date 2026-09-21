@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/skandertajine/digestron/internal/digest"
 
 	_ "github.com/skandertajine/digestron/internal/llm/noop"
@@ -56,6 +58,20 @@ func TestRecordSuccessPolicy(t *testing.T) {
 			Stats: []digest.SourceStats{{Source: "a"}, {Source: "b", Err: "down"}},
 			Sinks: []digest.SinkStats{{Sink: "s"}},
 		}, true},
+		// The production shape: one elasticsearch source, one preset of five
+		// rejected. The digest went out with four real counts. Exiting
+		// non-zero here fails the Job, and with backoffLimit 1 Kubernetes
+		// reruns it and pushes the same window to the phone a second time.
+		{"the only source was partial", digest.Report{
+			Stats: []digest.SourceStats{{Source: "es", Findings: 4,
+				Err: `1 of 5 queries failed: query "ssh auth failures": 400 Bad Request`}},
+			Sinks: []digest.SinkStats{{Sink: "s"}},
+		}, true},
+		{"the only source produced nothing", digest.Report{
+			Stats: []digest.SourceStats{{Source: "es", Findings: 0,
+				Err: `5 of 5 queries failed: query "ssh auth failures": 400 Bad Request`}},
+			Sinks: []digest.SinkStats{{Sink: "s"}},
+		}, false},
 		{"all sources failed", digest.Report{
 			Stats: []digest.SourceStats{{Source: "a", Err: "down"}, {Source: "b", Err: "down"}},
 			Sinks: []digest.SinkStats{{Sink: "s"}},
@@ -79,5 +95,45 @@ func TestRecordSuccessPolicy(t *testing.T) {
 				t.Errorf("Record() success = %v, want %v", got, tc.success)
 			}
 		})
+	}
+}
+
+// A partial source must not vanish into the success bucket: the run succeeded,
+// but something is broken and the metric is where that gets alerted on.
+func TestRecordLabelsPartialSourcesDistinctly(t *testing.T) {
+	t.Setenv("ES_PASSWORD", "x")
+	t.Setenv("HA_TOKEN", "x")
+	t.Setenv("SMTP_PASSWORD", "x")
+	t.Setenv("HOOK_TOKEN", "x")
+	app, err := Build("../../config.example.yaml", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app.Record(digest.Report{
+		Stats: []digest.SourceStats{
+			{Source: "es", Findings: 4, Err: "1 of 5 queries failed"},
+			{Source: "prom", Findings: 0, Err: "dial tcp: refused"},
+			{Source: "quiet", Findings: 2},
+		},
+		Sinks: []digest.SinkStats{{Sink: "s"}},
+	}, time.Second)
+
+	for _, tc := range []struct{ module, status string }{
+		{"es", "partial"},
+		{"prom", "error"},
+		{"quiet", "success"},
+	} {
+		c, err := app.Metrics.ModuleRunsTotal.GetMetricWithLabelValues(tc.module, tc.status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out dto.Metric
+		if err := c.Write(&out); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.GetCounter().GetValue(); got != 1 {
+			t.Errorf("module_runs_total{module=%q,status=%q} = %v, want 1", tc.module, tc.status, got)
+		}
 	}
 }
