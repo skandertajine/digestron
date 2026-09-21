@@ -136,6 +136,18 @@
   .llm-bar .item .v.fail { color: var(--critical); }
   .llm-bar .item .v.disabled { color: var(--muted-2); }
 
+  .actions { display: flex; align-items: center; gap: .9rem; }
+  .flash { font-family: var(--mono); font-size: .74rem; color: var(--warning); }
+  .check { display: flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent1); margin: 0; }
+  .btn {
+    font: 600 .8rem/1 var(--sans); color: #fff; cursor: pointer; border: none; border-radius: 999px;
+    padding: .55rem 1rem; background: linear-gradient(120deg, var(--accent1), var(--accent2));
+    box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset; transition: opacity .15s ease, transform .15s ease;
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .btn:disabled { opacity: .55; cursor: progress; font-family: var(--mono); font-weight: 500; }
+
   @media (prefers-reduced-motion: reduce) {
     .dot, .run-card { animation: none !important; }
     * { transition: none !important; }
@@ -149,7 +161,14 @@
     <h1>digestron</h1>
     <span class="tag">run history</span>
   </div>
-  <div class="status"><span class="dot"></span><span id="live-text">live</span></div>
+  <div class="actions">
+    <span class="flash" id="flash"></span>
+    <label class="check" title="query every source and the LLM, skip the sinks: nothing is sent">
+      <input type="checkbox" id="dry" checked> dry run
+    </label>
+    <button class="btn" id="run-btn" type="button">Run now</button>
+    <div class="status"><span class="dot"></span><span id="live-text">live</span></div>
+  </div>
 </header>
 
 <main class="app">
@@ -305,7 +324,71 @@ async function show(id) {
   `;
 }
 
+// Run now. The request returns at once; the run itself can take minutes, so
+// the page follows it through api/run until it ends, then reloads the list.
+const runBtn = document.getElementById("run-btn");
+const dryBox = document.getElementById("dry");
+const flashEl = document.getElementById("flash");
+let watching = false;
+
+function flash(msg) {
+  flashEl.textContent = msg;
+  if (msg) setTimeout(() => { if (flashEl.textContent === msg) flashEl.textContent = ""; }, 6000);
+}
+
+function renderStatus(s) {
+  runBtn.disabled = !!s.running;
+  if (s.running) {
+    const secs = Math.max(0, Math.round((Date.now() - new Date(s.started_at)) / 1000));
+    runBtn.textContent = `running${s.dry ? " (dry)" : ""} · ${secs}s`;
+    document.getElementById("live-text").textContent = "run in progress";
+  } else {
+    runBtn.textContent = "Run now";
+    document.getElementById("live-text").textContent = "live";
+  }
+}
+
+async function watchRun() {
+  if (watching) return;
+  watching = true;
+  let fails = 0;
+  try {
+    for (;;) {
+      let s;
+      try {
+        s = await (await fetch("api/run")).json();
+      } catch (e) {
+        // A 502 while the pod rolls, a laptop waking up: one failed poll is
+        // not the end of the run, so keep going before giving up.
+        if (++fails > 5) { renderStatus({ running: false }); flash("status unavailable"); return; }
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      fails = 0;
+      renderStatus(s);
+      if (!s.running) break;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } finally {
+    watching = false; // released before the reload: a click during it must start its own watch
+  }
+  refresh();
+}
+
+runBtn.addEventListener("click", async () => {
+  runBtn.disabled = true;
+  try {
+    const resp = await fetch("api/run?dry=" + (dryBox.checked ? "1" : "0"), { method: "POST" });
+    if (resp.status === 409) flash("a run is already in progress");
+    else if (!resp.ok) flash(`run refused: ${resp.status}`);
+  } catch (e) {
+    flash("server unreachable");
+  }
+  watchRun();
+});
+
 refresh();
+watchRun(); // the page may open while the hourly run is in flight
 setInterval(refresh, 30000);
 </script>
 </body>

@@ -40,6 +40,28 @@ per source, text sent per sink, LLM token usage), Prometheus metrics at
 `/metrics`, and `/healthz`. Kubernetes manifests for both modes live in
 [deploy/](deploy/).
 
+The UI has one button, **Run now** (`POST /api/run`, `GET /api/run` for its
+progress). With *dry run* ticked, the default, the run queries every source
+and the LLM but skips the sinks, so a test never reaches a phone; it lands in
+the history titled `(manual, dry)` and stays out of the metrics. Untick it
+and the run is a real digest, delivered and recorded, titled `(manual)`.
+Scheduled and manual runs never overlap: a second press answers `409`. A
+scheduler tick that lands during a full manual run is skipped and logged,
+because that run delivers the same window; one that lands during a dry run is
+replayed as soon as the dry run ends, because a dry run delivers nothing.
+
+From a shell, the API defaults to dry as well:
+
+```
+curl -X POST 'http://digestron-dev.home/api/run'          # dry: sources + LLM, no sinks
+curl -X POST 'http://digestron-dev.home/api/run?dry=0'    # delivered, recorded
+```
+
+The page has no login, like `/metrics`. Browsers cannot press the button on
+behalf of another site (cross-origin `POST`s are refused with `403`); anything
+that is not a browser, curl included, is not affected by that guard, so keep
+the ingress internal.
+
 ## Sources
 
 | Type | What it does |

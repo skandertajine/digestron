@@ -38,17 +38,7 @@ func serveCmd(args []string) int {
 		loc, _ = time.LoadLocation(tz) // validated at config load
 	}
 
-	runOnce := func() {
-		start := time.Now()
-		report := app.Runner.Run(context.Background())
-		success := app.Record(report, time.Since(start))
-		if _, err := app.Store.Append(report); err != nil {
-			app.Log.Warn("history not persisted", "error", err)
-		}
-		app.Log.Info("digest run finished",
-			"verdict", report.Verdict.String(), "findings", len(report.Findings),
-			"success", success, "duration", time.Since(start).Round(time.Millisecond).String())
-	}
+	gate := newRunGate(app)
 
 	scheduler, err := gocron.NewScheduler(gocron.WithLocation(loc))
 	if err != nil {
@@ -57,8 +47,10 @@ func serveCmd(args []string) int {
 	}
 	_, err = scheduler.NewJob(
 		gocron.CronJob(app.Cfg.Schedule.Cron, false),
-		gocron.NewTask(runOnce),
-		// Never two overlapping runs: a slow LLM must not stack digests.
+		gocron.NewTask(gate.scheduled),
+		// Never two overlapping runs: a slow LLM must not stack digests. The
+		// gate enforces it across manual runs too; this keeps gocron from
+		// even trying.
 		gocron.WithSingletonMode(gocron.LimitModeReschedule),
 	)
 	if err != nil {
@@ -71,7 +63,7 @@ func serveCmd(args []string) int {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	web.Register(mux, app.Store)
+	web.Register(mux, app.Store, gate)
 
 	server := &http.Server{
 		Addr:              app.Cfg.Metrics.Listen,
@@ -81,7 +73,7 @@ func serveCmd(args []string) int {
 
 	scheduler.Start()
 	if app.Cfg.Schedule.RunOnStart {
-		go runOnce()
+		go gate.scheduled()
 	}
 
 	errCh := make(chan error, 1)
