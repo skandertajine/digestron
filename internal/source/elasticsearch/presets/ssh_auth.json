@@ -1,13 +1,20 @@
 {
   "size": 0,
+  "track_total_hits": true,
   "query": {
     "bool": {
       "filter": [
         {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
-        {"exists": {"field": "ssh.auth_method"}},
-        {"term": {"event.outcome": "failure"}}
+        {"prefix": {"log.syslog.appname.keyword": "sshd"}},
+        {"bool": {
+          "should": [
+            {"term": {"event.outcome.keyword": "failure"}},
+            {"match_phrase": {"message": "Invalid user"}}
+          ],
+          "minimum_should_match": 1
+        }}
       ]
     }
   },
-  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+  "aggs": {"breakdown": {"terms": {"field": "client.ip.keyword", "size": 10}}}
 }

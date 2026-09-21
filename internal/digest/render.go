@@ -31,16 +31,44 @@ func RenderText(r Report) string {
 		}
 	}
 
-	var unreachable []string
-	for _, st := range r.Stats {
-		if st.Err != "" {
-			unreachable = append(unreachable, st.Source+": "+st.Err)
-		}
-	}
-	if len(unreachable) > 0 {
-		fmt.Fprintf(&b, "\nUnreachable sources: %s\n", strings.Join(unreachable, "; "))
+	if p := SourceProblems(r); p != "" {
+		b.WriteString("\n" + p + "\n")
 	}
 	return b.String()
+}
+
+// SourceProblems names the sources that did not answer in full, on at most
+// two lines. A source that returned nothing is "Failed" — the source itself,
+// or the network to it, is the thing to look at. A source that returned
+// findings *and* an error is "Partial": the counts above it are real but
+// short, and the gap is in one query, not in the wire. Conflating the two is
+// what sends an operator hunting a network fault when a query body was
+// rejected. Empty when every source answered in full.
+//
+// Exported because the failure has to reach the operator whatever built the
+// message. A sink that sends the LLM summary instead of the rendered digest
+// never calls RenderText, so it appends this itself; otherwise a run where
+// four queries of five never executed arrives looking complete.
+func SourceProblems(r Report) string {
+	var failed, partial []string
+	for _, st := range r.Stats {
+		switch {
+		case st.Partial():
+			partial = append(partial, st.Source+": "+st.Err)
+		case st.Err != "":
+			failed = append(failed, st.Source+": "+st.Err)
+		}
+	}
+	var lines []string
+	if len(failed) > 0 {
+		lines = append(lines, "Failed sources: "+strings.Join(failed, "; "))
+	}
+	if len(partial) > 0 {
+		lines = append(lines, "Partial sources: "+strings.Join(partial, "; "))
+	}
+	// One separator level per nesting level: "; " between sources here,
+	// " | " between the queries inside one source (see source.QueryErrors).
+	return strings.Join(lines, "\n")
 }
 
 func topDetails(details map[string]int, n int) string {

@@ -38,6 +38,22 @@ func TestPresetsRenderToValidJSON(t *testing.T) {
 			if !strings.Contains(p.Body, "{{.From}}") || !strings.Contains(p.Body, "{{.To}}") {
 				t.Error("preset body must template the time window")
 			}
+			// The two conventions elasticsearch.go reads the response with:
+			// hits.total is the count (so documents are pure overhead) and
+			// the detail map comes from the agg named "breakdown".
+			if body["size"] != float64(0) {
+				t.Errorf(`size = %v, want 0`, body["size"])
+			}
+			// Without this Elasticsearch stops counting at 10000 and reports
+			// exactly that, flagged only by a hits.total.relation of "gte" —
+			// so a busy hour, the one that matters, is silently flattened.
+			if body["track_total_hits"] != true {
+				t.Errorf(`track_total_hits = %v, want true: hits.total caps at 10000 otherwise`, body["track_total_hits"])
+			}
+			aggs, _ := body["aggs"].(map[string]any)
+			if _, ok := aggs["breakdown"]; !ok {
+				t.Errorf("aggs = %v, want one named breakdown", body["aggs"])
+			}
 			if p.Title == "" {
 				t.Error("preset needs a title")
 			}

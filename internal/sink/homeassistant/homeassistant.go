@@ -1,7 +1,9 @@
 // Package homeassistant delivers the digest as a Home Assistant notification
 // (POST /api/services/notify/<service>). The message defaults to the LLM
 // summary, falling back to the raw text digest when the LLM was skipped or
-// failed.
+// failed. Either way it carries the sources that did not fully answer, and
+// the title is marked when they exist: a push notification on a locked phone
+// is often read as a title and nothing more.
 package homeassistant
 
 import (
@@ -59,9 +61,17 @@ func New(name string, settings map[string]any) (digest.Sink, error) {
 func (s *Sink) Name() string { return s.name }
 
 func (s *Sink) Send(ctx context.Context, r digest.Report) error {
+	problems := digest.SourceProblems(r)
+
 	message := r.Summary
-	if message == "" {
-		message = digest.RenderText(r)
+	switch {
+	case message == "":
+		message = digest.RenderText(r) // already ends with the problems block
+	case problems != "":
+		// The summary is written from the findings that survived, so it reads
+		// like a quiet night even when most of the queries never ran. Append
+		// the casualties verbatim instead of hoping the model mentions them.
+		message += "\n\n" + problems
 	}
 	if s.messageTpl != nil {
 		var buf strings.Builder
@@ -71,8 +81,15 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 		message = buf.String()
 	}
 
+	// Verdict is the max over the findings that survived, so a run that lost
+	// four queries out of five still comes out [INFO]. Mark the title too:
+	// it is the one part of the notification a locked screen always shows.
+	verdict := strings.ToUpper(r.Verdict.String())
+	if problems != "" {
+		verdict += "\u00b7PARTIAL"
+	}
 	payload, err := json.Marshal(map[string]string{
-		"title":   fmt.Sprintf("[%s] %s", strings.ToUpper(r.Verdict.String()), r.Title),
+		"title":   fmt.Sprintf("[%s] %s", verdict, r.Title),
 		"message": message,
 	})
 	if err != nil {

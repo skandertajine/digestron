@@ -28,6 +28,9 @@ type Config struct {
 	NumPredict  int      `koanf:"num_predict"`
 	KeepAlive   string   `koanf:"keep_alive"`
 	Temperature *float64 `koanf:"temperature"`
+	// Think stays off unless asked for: on a reasoning model the trace eats
+	// num_predict before a single character of the digest is written.
+	Think bool `koanf:"think"`
 }
 
 type Client struct {
@@ -91,7 +94,7 @@ func (c *Client) Complete(ctx context.Context, req digest.Request) (digest.Respo
 			{Role: "user", Content: req.User},
 		},
 		Stream:    false,
-		Think:     false,
+		Think:     c.cfg.Think,
 		KeepAlive: c.cfg.KeepAlive,
 		Options:   options,
 	})

@@ -1,15 +1,18 @@
 {
   "size": 0,
+  "track_total_hits": true,
   "query": {
     "bool": {
       "filter": [
         {"range": {"@timestamp": {"gte": "{{.From}}", "lte": "{{.To}}"}}},
-        {"term": {"ufw.action": "BLOCK"}}
+        {"term": {"ufw.action.keyword": "BLOCK"}}
       ],
       "must_not": [
-        {"terms": {"destination.ip": ["224.0.0.0/4", "ff02::/16", "255.255.255.255"]}}
+        {"terms": {"destination.ip.keyword": ["255.255.255.255"]}},
+        {"regexp": {"destination.ip.keyword": "(22[4-9]|23[0-9])[.].*"}},
+        {"prefix": {"destination.ip.keyword": "ff02:"}}
       ]
     }
   },
-  "aggs": {"breakdown": {"terms": {"field": "client.ip", "size": 10}}}
+  "aggs": {"breakdown": {"terms": {"field": "client.ip.keyword", "size": 10}}}
 }

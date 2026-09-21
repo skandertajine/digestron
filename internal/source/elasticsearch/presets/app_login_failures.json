@@ -1,5 +1,6 @@
 {
   "size": 0,
+  "track_total_hits": true,
   "query": {
     "bool": {
       "filter": [
@@ -8,27 +9,27 @@
       "minimum_should_match": 1,
       "should": [
         {"bool": {"filter": [
-          {"term": {"kubernetes.namespace": "home-assistant"}},
+          {"term": {"kubernetes.namespace.keyword": "home-assistant"}},
           {"match_phrase": {"message": "Login attempt or request with invalid authentication"}}
         ]}},
         {"bool": {"filter": [
-          {"term": {"kubernetes.namespace": "argocd"}},
+          {"term": {"kubernetes.namespace.keyword": "argocd"}},
           {"match_phrase": {"message": "Invalid username or password"}}
         ]}},
         {"bool": {"filter": [
-          {"term": {"kubernetes.namespace": "grafana"}},
+          {"term": {"kubernetes.namespace.keyword": "grafana"}},
           {"match_phrase": {"message": "errorMessageID=password-auth.failed"}}
         ]}},
         {"bool": {"filter": [
-          {"term": {"kubernetes.namespace": "immich"}},
+          {"term": {"kubernetes.namespace.keyword": "immich"}},
           {"match_phrase": {"message": "Failed login attempt"}}
         ]}},
         {"bool": {"filter": [
-          {"term": {"kubernetes.namespace": "vaultwarden"}},
+          {"term": {"kubernetes.namespace.keyword": "vaultwarden"}},
           {"match_phrase": {"message": "Username or password is incorrect"}}
         ]}}
       ]
     }
   },
-  "aggs": {"breakdown": {"terms": {"field": "kubernetes.namespace", "size": 10}}}
+  "aggs": {"breakdown": {"terms": {"field": "kubernetes.namespace.keyword", "size": 10}}}
 }

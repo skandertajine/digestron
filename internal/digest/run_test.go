@@ -135,6 +135,44 @@ func TestRunSourceFailureIsVisibleNotFatal(t *testing.T) {
 	}
 }
 
+// A source may fail halfway and still hand back what it collected. Keeping
+// those findings is the whole point: one rejected Elasticsearch query used to
+// discard four healthy ones.
+func TestRunPartialSourceKeepsFindings(t *testing.T) {
+	sink := &fakeSink{name: "s"}
+	r := &Runner{
+		Title: "t", Window: time.Hour, Log: quietLogger(),
+		Sources: []RunSource{{Source: fakeSource{
+			name:     "es",
+			findings: []Finding{{Source: "es", Title: "firewall blocked flows", Count: 936}},
+			err:      errors.New(`1 of 2 queries failed: query "ssh auth failures": 400 Bad Request`),
+		}}},
+		Sinks: []RunSink{{Sink: sink}},
+	}
+	report := r.Run(context.Background())
+
+	if len(report.Findings) != 1 || report.Findings[0].Count != 936 {
+		t.Fatalf("findings = %+v, want the ones the source did collect", report.Findings)
+	}
+	st := report.Stats[0]
+	if !st.Partial() {
+		t.Errorf("stats = %+v, want partial: findings and an error together", st)
+	}
+	if !strings.Contains(st.Err, "ssh auth failures") {
+		t.Errorf("the failed query must be named, not swallowed: %+v", st)
+	}
+	if len(sink.received) != 1 {
+		t.Fatal("a partial digest must still be delivered")
+	}
+	text := RenderText(sink.received[0])
+	if !strings.Contains(text, "Partial sources: es: 1 of 2 queries failed") {
+		t.Errorf("the digest must say it is incomplete:\n%s", text)
+	}
+	if strings.Contains(text, "Failed sources") {
+		t.Errorf("a source that answered some queries is partial, not failed:\n%s", text)
+	}
+}
+
 func TestRunSourceTimeout(t *testing.T) {
 	r := &Runner{
 		Title: "t", Window: time.Hour, Log: quietLogger(),
@@ -225,7 +263,53 @@ func TestRenderTextDeterministic(t *testing.T) {
 	if !strings.Contains(first, "(c=3, a=2, b=2)") {
 		t.Errorf("details must be top-3, count desc then key asc:\n%s", first)
 	}
-	if !strings.Contains(first, "Unreachable sources: prom") {
+	if !strings.Contains(first, "Failed sources: prom") {
 		t.Errorf("source errors must be visible in the digest:\n%s", first)
+	}
+}
+
+// A source whose every query failed has zero findings, which used to put it in
+// the same sentence as a source nobody could connect to. The two point at
+// different things — a query body versus the network — and misreading one for
+// the other is what starts an afternoon of debugging the wrong layer.
+func TestSourceProblemsSeparatesFailedFromPartial(t *testing.T) {
+	r := Report{Stats: []SourceStats{
+		{Source: "healthy", Findings: 3},
+		{Source: "half_answered", Findings: 4, Err: `1 of 5 queries failed: query "ssh auth failures": 400`},
+		{Source: "all_rejected", Findings: 0, Err: `5 of 5 queries failed: query "ssh auth failures": 400`},
+		{Source: "offline", Findings: 0, Err: "dial tcp: refused"},
+	}}
+
+	got := SourceProblems(r)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("SourceProblems() = %q, want one line per kind", got)
+	}
+	failed, partial := lines[0], lines[1]
+
+	if !strings.HasPrefix(failed, "Failed sources: ") ||
+		!strings.Contains(failed, "all_rejected") || !strings.Contains(failed, "offline") {
+		t.Errorf("sources that produced nothing belong on the failed line: %q", failed)
+	}
+	if strings.Contains(failed, "half_answered") {
+		t.Errorf("a source that delivered findings is not a failed source: %q", failed)
+	}
+	if !strings.HasPrefix(partial, "Partial sources: ") || !strings.Contains(partial, "half_answered") {
+		t.Errorf("partial line = %q", partial)
+	}
+	if strings.Contains(partial, "all_rejected") || strings.Contains(partial, "offline") {
+		t.Errorf("a source with no findings is not partial, it is failed: %q", partial)
+	}
+	if strings.Contains(got, "healthy") {
+		t.Errorf("a source that answered in full must not be mentioned: %q", got)
+	}
+	// Sources are joined one level up from the queries inside a source, which
+	// source.QueryErrors joins with " | ".
+	if !strings.Contains(failed, "refused") || !strings.Contains(failed, "; ") {
+		t.Errorf("sources must be separated by \"; \": %q", failed)
+	}
+
+	if p := SourceProblems(Report{Stats: []SourceStats{{Source: "healthy", Findings: 3}}}); p != "" {
+		t.Errorf("SourceProblems() = %q, want empty when every source answered", p)
 	}
 }

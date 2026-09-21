@@ -39,6 +39,11 @@ type Sink struct {
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
 		"rendertext": digest.RenderText,
+		// For a body built from {{.Summary}}: the summary is written from the
+		// findings that survived, so on its own it reads like a complete run
+		// even when most of the queries never executed. rendertext already
+		// includes this block; append it by hand when you do not use it.
+		"sourceproblems": digest.SourceProblems,
 		"tojson": func(v any) (string, error) {
 			b, err := json.Marshal(v)
 			return string(b), err

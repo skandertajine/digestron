@@ -78,6 +78,7 @@ llm:
     model: qwen3:8b
     num_ctx: 8192 # explicit: the server default silently truncates
     keep_alive: 10m
+    think: false # reasoning models: spend num_predict on the answer, not a trace
     # openai-compatible variant (works with OpenAI, a LiteLLM proxy, vLLM,
     # LM Studio, Groq, Mistral...):
     #   url: http://litellm:4000

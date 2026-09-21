@@ -106,3 +106,90 @@ func TestNewValidation(t *testing.T) {
 		})
 	}
 }
+
+// Same contract as the elasticsearch source: a query PromQL rejects costs one
+// finding, not the whole module.
+func TestCollectPartialFailure(t *testing.T) {
+	var ran int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran++
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("query") == "count(up ==" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"unexpected end of input"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"instance":"node1"},"value":[1755080000,"4"]}
+		]}}`))
+	}))
+	defer srv.Close()
+
+	src, err := New("prom", map[string]any{
+		"url": srv.URL,
+		"queries": []any{
+			map[string]any{"name": "broken", "query": "count(up =="},
+			map[string]any{"name": "targets down", "query": "count(up == 0)"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := src.Collect(context.Background(), digest.Window{To: time.Now()})
+
+	if ran != 2 {
+		t.Errorf("queries executed = %d, want 2", ran)
+	}
+	if len(findings) != 1 || findings[0].Title != "targets down" || findings[0].Count != 4 {
+		t.Fatalf("findings = %+v, want the surviving query's", findings)
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 queries failed") ||
+		!strings.Contains(err.Error(), "broken") {
+		t.Errorf("error must name the count and the query: %v", err)
+	}
+}
+
+// Prometheus answers 200 with a warnings array when it served the query from
+// incomplete data. The value that comes back is a real undercount, so it is
+// named as a failure instead of being counted as a fact.
+func TestCollectWarningIsAFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("query") == "count(up == 0)" {
+			_, _ = w.Write([]byte(`{"status":"success",
+				"warnings":["error querying remote storage: context deadline exceeded"],
+				"data":{"resultType":"vector","result":[
+					{"metric":{"instance":"node1"},"value":[1755080000,"1"]}
+				]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"instance":"node1"},"value":[1755080000,"9"]}
+		]}}`))
+	}))
+	defer srv.Close()
+
+	src, err := New("prom", map[string]any{
+		"url": srv.URL,
+		"queries": []any{
+			map[string]any{"name": "targets down", "query": "count(up == 0)"},
+			map[string]any{"name": "restarts", "query": "count(restarts)"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := src.Collect(context.Background(), digest.Window{To: time.Now()})
+
+	if len(findings) != 1 || findings[0].Title != "restarts" {
+		t.Fatalf("findings = %+v, want only the query served from complete data", findings)
+	}
+	if err == nil {
+		t.Fatal("a partial result must not be silent")
+	}
+	if !strings.Contains(err.Error(), "targets down") || !strings.Contains(err.Error(), "remote storage") {
+		t.Errorf("error must name the query and the warning: %v", err)
+	}
+}

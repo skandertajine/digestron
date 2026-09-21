@@ -49,23 +49,41 @@ per source, text sent per sink, LLM token usage), Prometheus metrics at
 
 Each query yields one finding: a count, a severity scored against your
 `severity: {warning: N, critical: M}` thresholds, and a breakdown (by
-convention, a single terms aggregation named `breakdown`).
+convention, a single terms aggregation named `breakdown`). A query that
+fails does not take its neighbours with it: the source returns what it did
+collect and the digest names the casualties — a source that lost some
+queries on a `Partial sources:` line, one that returned nothing at all on a
+`Failed sources:` line, because those are different things to go and fix.
+Counts you can trust, minus the ones you cannot.
 
-Embedded Elasticsearch presets (tuned for a Filebeat-style index):
+A count is only reported when the cluster says it is complete. Elasticsearch
+answers `200` with partial results when a shard fails or the search times
+out, and stops counting at 10000 unless the body sets `track_total_hits`
+(every preset does); Prometheus answers `200` with a `warnings` array when it
+served the query from incomplete data. In each case the query is reported as
+failed instead of contributing a number that reads like a measurement.
+
+Embedded Elasticsearch presets (tuned for a Filebeat-style index). Exact
+matches and aggregations go through the `.keyword` subfield: under default
+dynamic mapping a string lands as `text`, where a `term` clause matches
+analysed tokens (`BLOCK` never matches, `pi-nginx` splits in two) and a
+`terms` aggregation is refused outright. The fields that are *not* matched
+exactly keep their bare name — `message` through `match_phrase` on the
+analysed text, `http.response.status_code` through a numeric `range`:
 
 | Preset | Measures | Needs fields |
 |---|---|---|
-| `fail2ban` | fail2ban bans | `source_text`, `fail2ban.action`, `client.ip` |
-| `ssh_auth` | SSH auth failures | `ssh.auth_method`, `event.outcome`, `client.ip` |
+| `fail2ban` | fail2ban bans | `source`, `fail2ban.action`, `client.ip` |
+| `ssh_auth` | SSH auth failures (rejected credentials and unknown users) | `log.syslog.appname`, `event.outcome`, `message`, `client.ip` |
 | `app_login_failures` | Failed logins across common apps (Home Assistant, ArgoCD, Grafana, Immich, Vaultwarden) | `kubernetes.namespace`, `message` |
 | `ufw_blocks` | Directed firewall blocks (multicast noise excluded) | `ufw.action`, `destination.ip`, `client.ip` |
-| `nginx_public` | HTTP errors on the public edge | `source_text`, `http.response.status_code`, `client.ip` |
+| `nginx_public` | HTTP errors on the public edge | `source`, `http.response.status_code`, `client.ip` |
 
 ## LLM providers
 
 | Type | Notes |
 |---|---|
-| `ollama` | Native `/api/chat`: explicit `num_ctx` (the server default silently truncates long prompts), `think` disabled, `keep_alive` to skip cold starts. |
+| `ollama` | Native `/api/chat`: explicit `num_ctx` (the server default silently truncates long prompts), `think: false` by default (a reasoning model otherwise spends the whole budget on its trace and returns nothing), `keep_alive` to skip cold starts. |
 | `openai-compatible` | Any `/v1/chat/completions`: OpenAI, a [LiteLLM](https://github.com/BerriAI/litellm) proxy (→ 100+ providers), vLLM, LM Studio, Groq, Mistral. The max-tokens field name is configurable because implementations disagree. |
 | `noop` | No LLM. The digest is the raw counters. Also available as `run -no-llm`. |
 
@@ -75,21 +93,26 @@ When the LLM is down, the digest still goes out — raw counters beat silence.
 
 | Type | Notes |
 |---|---|
-| `homeassistant` | `notify.<service>` call; the message is the LLM summary, falling back to the raw digest. |
+| `homeassistant` | `notify.<service>` call; the message is the LLM summary, falling back to the raw digest. Either way it carries the sources that did not fully answer, and the title is marked `PARTIAL` when there are any — the verdict is the max over the findings that *survived*, so an incomplete run is otherwise indistinguishable from a quiet one on a locked screen. |
 | `email` | SMTP with STARTTLS; subject templated on the report. |
-| `webhook` | Generic escape hatch: method, headers, `text/template` body over the report (`rendertext`, `tojson` helpers). |
+| `webhook` | Generic escape hatch: method, headers, `text/template` body over the report (`rendertext`, `sourceproblems`, `tojson` helpers). |
 
 ## Metrics
 
 All prefixed `digestron_`: `last_success_timestamp_seconds` (alert on its
 age), `runs_total{status}`, `run_duration_seconds`,
-`module_runs_total{module,status}`, `module_duration_seconds{module}`,
-`findings_total{module,severity}`, `notifications_total{sink,status}`,
-`llm_tokens_total{model,kind}`, `llm_duration_seconds`, `build_info`.
+`module_runs_total{module,status}` — `success`, `error`, or `partial` for a
+source that lost some queries and delivered the rest —
+`module_duration_seconds{module}`, `findings_total{module,severity}`,
+`notifications_total{sink,status}`, `llm_tokens_total{model,kind}`,
+`llm_duration_seconds`, `build_info`.
 
 In `run` mode a failed run exits non-zero, so a Kubernetes CronJob plus
 kube-state-metrics (`kube_job_status_failed`) covers alerting with no extra
-infrastructure.
+infrastructure. A *partial* run is not a failed run: the digest went out with
+the counts that survived, and failing the Job would only have Kubernetes
+retry it and push the same window to your phone twice. Alert on
+`module_runs_total{status="partial"}` instead.
 
 ## Security posture
 
