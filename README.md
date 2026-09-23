@@ -38,7 +38,20 @@ digestron serve -config config.yaml   # internal scheduler + metrics + web UI
 `serve` exposes on `:9090`: the web UI at `/` (run history: findings received
 per source, text sent per sink, LLM token usage), Prometheus metrics at
 `/metrics`, and `/healthz`. Kubernetes manifests for both modes live in
-[deploy/](deploy/).
+[deploy/](deploy/). Every response carries a strict `Content-Security-Policy`
+(the page is one file, inline styles and scripts only, no external resource of
+any kind) plus `X-Frame-Options: DENY`.
+
+The header strip shows the build, the last success and its age (flagged once
+past 2h), the next scheduled run, the current run's phase (`collecting`,
+`summarizing`, `delivering`) and the log ring's size. **Check all**
+(`POST /api/check`, optionally `{"module":"name"}` for one) probes every
+source, sink and the LLM with its own 10s timeout and shows ok/failed/no-probe
+per module — it reaches every configured backend, so it sits behind the same
+cross-origin guard as the button. **Stop** (`DELETE /api/run`) cancels the run
+in flight: it stops between stages (never mid-request), is still recorded in
+the history titled `(cancelled)`, and is never counted as a success — a
+cancelled hourly digest does not refresh `last_success_timestamp`, on purpose.
 
 The UI has one button, **Run now** (`POST /api/run`, `GET /api/run` for its
 progress). With *dry run* ticked, the default, the run queries every source

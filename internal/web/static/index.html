@@ -88,6 +88,11 @@
   .run-card .meta { display: flex; gap: .6rem; font-size: .72rem; color: var(--muted-2); font-family: var(--mono); }
   .run-card .meta .bad { color: var(--critical); }
 
+  .kindtag { font: 600 .64rem/1 var(--mono); text-transform: uppercase; letter-spacing: .03em; padding: .18rem .45rem; border-radius: 999px; }
+  .kindtag.manual { color: var(--accent2); background: rgba(34,211,238,.12); }
+  .kindtag.test { color: var(--muted); background: rgba(255,255,255,.06); }
+  .kindtag.cancelled { color: var(--critical); background: rgba(244,63,94,.12); }
+
   .pill { display: inline-flex; align-items: center; gap: .35rem; padding: .18rem .55rem; border-radius: 999px; font-size: .7rem; font-weight: 600; letter-spacing: .01em; text-transform: uppercase; }
   .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .pill.info { color: var(--info); background: rgba(59,130,246,.14); }
@@ -148,7 +153,24 @@
   .btn:hover:not(:disabled) { transform: translateY(-1px); }
   .btn:disabled { opacity: .55; cursor: progress; font-family: var(--mono); font-weight: 500; }
 
-  .logs-panel { max-width: 1400px; margin: 0 auto 2rem; padding: 0 1.5rem; }
+  .strip { max-width: 1400px; margin: .9rem auto 0; padding: 0 1.5rem; }
+  .strip .panel { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1.6rem; padding: .7rem 1.1rem; }
+  .strip .field { display: flex; flex-direction: column; gap: .1rem; }
+  .strip .field .k { font-size: .66rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); }
+  .strip .field .v { font: .82rem var(--mono); color: var(--text); }
+  .strip .field .v.stale { color: var(--warning); }
+  .strip .field .v.phase { color: var(--accent2); }
+  .strip .spacer { flex: 1; }
+  .btn.small { padding: .4rem .8rem; font-size: .74rem; }
+  .btn.danger { background: linear-gradient(120deg, #f43f5e, #fb7185); }
+  .checkresults { max-width: 1400px; margin: .6rem auto 0; padding: 0 1.5rem; }
+  .checkresults .panel { padding: .6rem 1.1rem; display: flex; flex-wrap: wrap; gap: .4rem .8rem; }
+  .checkrow { display: flex; align-items: center; gap: .35rem; font: .78rem var(--mono); padding: .2rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
+  .checkrow .icon { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .checkrow .icon.ok { background: var(--ok); } .checkrow .icon.fail { background: var(--critical); } .checkrow .icon.skip { background: var(--muted-2); }
+  .checkrow .err { color: var(--critical); }
+
+  .logs-panel { max-width: 1400px; margin: 1.25rem auto 2rem; padding: 0 1.5rem; }
   .logs-panel .panel { overflow: hidden; }
   .logs-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; padding: .8rem 1.1rem; border-bottom: 1px solid var(--border); }
   .logs-head h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
@@ -199,9 +221,25 @@
       <input type="checkbox" id="dry" checked> dry run
     </label>
     <button class="btn" id="run-btn" type="button">Run now</button>
+    <button class="btn small danger" id="cancel-btn" type="button" hidden>Stop</button>
     <div class="status"><span class="dot"></span><span id="live-text">live</span></div>
   </div>
 </header>
+
+<section class="strip" aria-label="status">
+  <div class="panel" id="status-strip">
+    <div class="field"><span class="k">version</span><span class="v" id="st-version">—</span></div>
+    <div class="field"><span class="k">last success</span><span class="v" id="st-success">—</span></div>
+    <div class="field"><span class="k">next run</span><span class="v" id="st-next">—</span></div>
+    <div class="field"><span class="k">current run</span><span class="v phase" id="st-phase">idle</span></div>
+    <div class="field"><span class="k">log ring</span><span class="v" id="st-logs">—</span></div>
+    <div class="spacer"></div>
+    <button class="btn small" id="check-btn" type="button">Check all</button>
+  </div>
+</section>
+<section class="checkresults" id="check-results-wrap" hidden>
+  <div class="panel" id="check-results"></div>
+</section>
 
 <main class="app">
   <section class="panel">
@@ -277,6 +315,16 @@ function sparkline(points) {
     <polyline points="${line}" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 
+// runKindTag says how a run came to exist, when that is not the ordinary
+// hourly digest: pressed manually, a dry test, or one the operator stopped —
+// visible in the list, not only after opening the run.
+function runKindTag(r) {
+  if (/\(cancelled\)\s*$/.test(r.title || "")) return `<span class="kindtag cancelled">stopped</span>`;
+  if (r.kind === "manual") return `<span class="kindtag manual">manual</span>`;
+  if (r.kind === "test") return `<span class="kindtag test">test</span>`;
+  return "";
+}
+
 function renderCard(r) {
   const model = r.model ? `<span>${esc(r.model)}</span>` : "";
   const tok = (r.prompt_tokens || r.completion_tokens) ? `<span>${r.prompt_tokens || 0}/${r.completion_tokens || 0}tok</span>` : "";
@@ -285,7 +333,7 @@ function renderCard(r) {
   if (r.sinks_failed) fails.push(`<span class="bad">${r.sinks_failed} sink fail</span>`);
   return `
     <div class="run-card ${r.id === selected ? "selected" : ""}" style="--sev:${sevColor(r.verdict)}" data-id="${esc(r.id)}">
-      <div class="row1">${pill(r.verdict)}<time>${fmtTime(r.generated_at)}</time></div>
+      <div class="row1">${pill(r.verdict)}${runKindTag(r)}<time>${fmtTime(r.generated_at)}</time></div>
       <div class="summary">${esc((r.summary || "no summary").slice(0, 140))}</div>
       <div class="meta">${model}${tok}<span>${r.findings} findings</span>${fails.join("")}<a class="logs-link" data-run="${esc(r.id)}" title="show only this run's log lines">logs</a></div>
     </div>`;
@@ -385,8 +433,10 @@ async function show(id) {
 // Run now. The request returns at once; the run itself can take minutes, so
 // the page follows it through api/run until it ends, then reloads the list.
 const runBtn = document.getElementById("run-btn");
+const cancelBtn = document.getElementById("cancel-btn");
 const dryBox = document.getElementById("dry");
 const flashEl = document.getElementById("flash");
+const phaseEl = document.getElementById("st-phase");
 let watching = false;
 
 function flash(msg) {
@@ -396,15 +446,30 @@ function flash(msg) {
 
 function renderStatus(s) {
   runBtn.disabled = !!s.running;
+  cancelBtn.hidden = !s.running;
   if (s.running) {
     const secs = Math.max(0, Math.round((Date.now() - new Date(s.started_at)) / 1000));
     runBtn.textContent = `running${s.dry ? " (dry)" : ""} · ${secs}s`;
     document.getElementById("live-text").textContent = "run in progress";
+    phaseEl.textContent = (s.phase || "starting") + (s.dry ? " (dry)" : "");
   } else {
     runBtn.textContent = "Run now";
     document.getElementById("live-text").textContent = "live";
+    phaseEl.textContent = "idle";
   }
 }
+
+cancelBtn.addEventListener("click", async () => {
+  cancelBtn.disabled = true;
+  try {
+    const resp = await fetch("api/run", { method: "DELETE" });
+    if (resp.status === 404) flash("nothing to stop");
+    else if (!resp.ok) flash(`stop refused: ${resp.status}`);
+  } catch (e) {
+    flash("server unreachable");
+  }
+  cancelBtn.disabled = false;
+});
 
 async function watchRun() {
   if (watching) return;
@@ -639,6 +704,96 @@ logStderr.addEventListener("change", async () => {
   pollLogs();
 });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLogs(); });
+
+// Status strip: version, last success, next run, log ring occupancy. A
+// separate slow poll (the run button already polls api/run at 2s while a run
+// is active) — five seconds is plenty for numbers that change once an hour.
+// Always past-relative (last success, never a future event by the time the
+// operator reads it): a target that looks future-dated by more than a
+// moment is clock skew between this browser and the server, not a real
+// future timestamp, so it reads as "just now" rather than an unlabelled
+// bare number that could be misread as a countdown.
+const relTime = (d, from = Date.now()) => {
+  if (!d) return "never";
+  const s = Math.round((from - new Date(d).getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+const fmtBytes = n => n < 1024 ? n + "B" : n < 1048576 ? (n / 1024).toFixed(1) + "KB" : (n / 1048576).toFixed(1) + "MB";
+
+async function pollStatus() {
+  try {
+    const s = await (await fetch("api/status")).json();
+    document.getElementById("st-version").textContent = s.version || "—";
+    document.getElementById("st-version").title = `${s.go_version || ""} · started ${s.started_at ? relTime(s.started_at) : "—"}`;
+    const successEl = document.getElementById("st-success");
+    successEl.textContent = relTime(s.last_success);
+    successEl.title = s.last_success ? new Date(s.last_success).toLocaleString() : "";
+    successEl.classList.toggle("stale", !s.last_success || (Date.now() - new Date(s.last_success).getTime()) > 2 * 3600 * 1000);
+    const nextEl = document.getElementById("st-next");
+    if (s.next_run) {
+      const secs = Math.round((new Date(s.next_run).getTime() - Date.now()) / 1000);
+      nextEl.textContent = secs > 0 ? `in ${secs < 60 ? secs + "s" : Math.round(secs / 60) + "m"}` : "due";
+      nextEl.title = new Date(s.next_run).toLocaleString();
+    } else {
+      nextEl.textContent = "—"; nextEl.title = "";
+    }
+    document.getElementById("st-logs").textContent = `${s.log_records ?? 0} lines · ${fmtBytes(s.log_bytes || 0)}`;
+  } catch (e) {
+    // the strip is a convenience; a failed poll just leaves the last numbers up
+  }
+  // watchRun() only polls api/run once locally triggered (page load, or a
+  // local click) and stops the moment a run ends — it never restarts on its
+  // own. A run the cron started, or one pressed from another tab or another
+  // device, would otherwise leave the phase field and the Stop button stuck
+  // on "idle" until this tab does something. This slow tick is the net that
+  // catches that: while nothing is being watched, check once every 5s, and
+  // hand off to the fast 2s loop the moment something is actually running.
+  if (!watching) {
+    try {
+      renderStatus(await (await fetch("api/run")).json());
+    } catch (e) { /* renderStatus keeps the last known state */ }
+    if (runBtn.disabled) watchRun();
+  }
+}
+
+// Check all: probes every configured module and shows the answers as chips.
+// Never runs on its own — only on request, since it reaches every backend.
+const checkBtn = document.getElementById("check-btn");
+const checkWrap = document.getElementById("check-results-wrap");
+const checkResults = document.getElementById("check-results");
+
+function renderCheck(results) {
+  checkResults.innerHTML = results.map(r => {
+    const cls = r.skipped ? "skip" : r.ok ? "ok" : "fail";
+    const label = r.skipped ? "no probe" : r.ok ? `${r.ms}ms` : esc(r.error || "failed");
+    return `<span class="checkrow"><span class="icon ${cls}"></span><b>${esc(r.kind)}</b>&nbsp;${esc(r.name)}` +
+      `<span class="${r.ok || r.skipped ? "" : "err"}">${label}</span></span>`;
+  }).join("") || `<span style="color:var(--muted-2);font-size:.8rem">no modules configured</span>`;
+  checkWrap.hidden = false;
+}
+
+checkBtn.addEventListener("click", async () => {
+  checkBtn.disabled = true;
+  const prev = checkBtn.textContent;
+  checkBtn.textContent = "checking…";
+  try {
+    const resp = await fetch("api/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!resp.ok) throw new Error("status " + resp.status);
+    renderCheck(await resp.json());
+  } catch (e) {
+    flash("check failed: server unreachable or refused");
+  } finally {
+    checkBtn.disabled = false;
+    checkBtn.textContent = prev;
+  }
+});
+
+pollStatus();
+setInterval(pollStatus, 5000);
 
 resetLogs();
 const logTimer = setInterval(pollLogs, 2000);

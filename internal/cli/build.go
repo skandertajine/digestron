@@ -114,6 +114,14 @@ func timeoutOr(d time.Duration) time.Duration {
 // real digest and the operator already has it on their phone; exiting
 // non-zero would only make Kubernetes rerun the CronJob (backoffLimit 1,
 // restartPolicy Never) and push the same window a second time.
+//
+// A cancelled run (the operator pressed Stop) is still recorded — its
+// LastRunTimestamp and whatever module stats it collected before stopping are
+// real and worth keeping — but it is never a success: r.Sinks is typically
+// empty because delivery never ran, which the ordinary formula below would
+// read as "nothing failed" and wrongly call success. It gets its own status
+// label instead of folding into "failure", since it was not a failure
+// either — the operator chose to stop it.
 func (a *App) Record(r digest.Report, wall time.Duration) (success bool) {
 	a.Metrics.LastRunTimestamp.Set(float64(r.GeneratedAt.Unix()))
 	a.Metrics.RunDuration.Observe(wall.Seconds())
@@ -152,11 +160,14 @@ func (a *App) Record(r digest.Report, wall time.Duration) (success bool) {
 		a.Metrics.NotificationsTotal.WithLabelValues(st.Sink, status).Inc()
 	}
 
-	success = sinksFailed == 0 && (len(r.Stats) == 0 || sourcesFailed < len(r.Stats))
-	if success {
+	success = !r.Cancelled && sinksFailed == 0 && (len(r.Stats) == 0 || sourcesFailed < len(r.Stats))
+	switch {
+	case success:
 		a.Metrics.RunsTotal.WithLabelValues("success").Inc()
 		a.Metrics.LastSuccessTimestamp.Set(float64(time.Now().Unix()))
-	} else {
+	case r.Cancelled:
+		a.Metrics.RunsTotal.WithLabelValues("cancelled").Inc()
+	default:
 		a.Metrics.RunsTotal.WithLabelValues("failure").Inc()
 	}
 	return success

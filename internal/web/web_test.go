@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,9 +20,21 @@ import (
 
 // fakeTrigger records what the page asked for and lets a test end the run.
 type fakeTrigger struct {
-	mu      sync.Mutex
-	status  RunStatus
-	started []bool // the dry flag of every accepted Start
+	mu        sync.Mutex
+	status    RunStatus
+	started   []bool // the dry flag of every accepted Start
+	cancelled int
+}
+
+func (f *fakeTrigger) Cancel() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.status.Running {
+		return ErrNotRunning
+	}
+	f.cancelled++
+	f.status = RunStatus{}
+	return nil
 }
 
 func (f *fakeTrigger) Start(dry bool) error {
@@ -105,7 +118,7 @@ func TestRunsListAndDetail(t *testing.T) {
 	}
 	got := list[0]
 	if got["verdict"] != "warning" || got["sources_failed"] != float64(1) ||
-		got["sinks_failed"] != float64(1) || got["prompt_tokens"] != float64(100) {
+		got["sinks_failed"] != float64(1) || got["prompt_tokens"] != float64(100) || got["kind"] != "schedule" {
 		t.Errorf("summary = %v", got)
 	}
 
@@ -483,5 +496,277 @@ func TestJSONResponsesAreNotSniffable(t *testing.T) {
 	resp.Body.Close()
 	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+}
+
+// ---------------------------------------------------------------- cancel
+
+func TestCancelStopsARunAndRefusesWhenIdle(t *testing.T) {
+	srv, _, trig := testServer(t)
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/run", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("DELETE while idle: status %d, want 404", resp.StatusCode)
+	}
+
+	if _, body := postRun(t, srv.URL+"/api/run?dry=1"); body["started"] != true {
+		t.Fatal("could not start a run to cancel")
+	}
+	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/run", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("DELETE while running: status %d, want 204", resp.StatusCode)
+	}
+	if trig.cancelled != 1 {
+		t.Errorf("trigger.cancelled = %d, want 1", trig.cancelled)
+	}
+}
+
+// DELETE is as much a side-effecting route as POST, and the page has no login.
+func TestCancelRefusesCrossSiteRequests(t *testing.T) {
+	srv, _, trig := testServer(t)
+	_, _ = postRun(t, srv.URL+"/api/run?dry=1")
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/run", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-site DELETE: status %d, want 403", resp.StatusCode)
+	}
+	if trig.cancelled != 0 {
+		t.Error("a refused cross-site DELETE still cancelled the run")
+	}
+}
+
+// ---------------------------------------------------------------- status & check
+
+type fakeOps struct {
+	status Status
+	block  chan struct{} // when set, Check waits for it or ctx.Done()
+
+	mu         sync.Mutex
+	checkCalls []string // the module argument of every Check call
+	results    []CheckResult
+}
+
+func (f *fakeOps) Status() Status { return f.status }
+
+func (f *fakeOps) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.checkCalls)
+}
+
+func (f *fakeOps) Check(ctx context.Context, module string) []CheckResult {
+	f.mu.Lock()
+	f.checkCalls = append(f.checkCalls, module)
+	results := f.results
+	f.mu.Unlock()
+	if f.block != nil {
+		select {
+		case <-f.block:
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	return results
+}
+
+func opsServer(t *testing.T, ops Ops) *httptest.Server {
+	t.Helper()
+	st, _ := store.Open("", 10)
+	mux := http.NewServeMux()
+	Register(mux, Deps{Store: st, Trigger: &fakeTrigger{}, Ops: ops})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestStatusEndpointReturnsWhatOpsReports(t *testing.T) {
+	next := time.Now().Add(37 * time.Minute).UTC().Truncate(time.Second)
+	fo := &fakeOps{status: Status{
+		Version: "dev-abc123", GoVersion: "go1.26", Cron: "5 * * * *", Timezone: "Europe/Paris",
+		NextRun: &next, LogRecords: 12, LogBytes: 3456, Goroutines: 9, MemAllocBytes: 1 << 20,
+	}}
+	srv := opsServer(t, fo)
+
+	resp, err := http.Get(srv.URL + "/api/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got Status
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "dev-abc123" || got.Cron != "5 * * * *" || got.LogRecords != 12 || got.NextRun == nil || !got.NextRun.Equal(next) {
+		t.Errorf("status = %+v", got)
+	}
+}
+
+// A fresh process has no last run and no next run yet (the scheduler names
+// its job only after Start, and no history exists before the first tick).
+// Those fields must be absent from the JSON, not Go's zero time.Time
+// serialized as a real-looking, ancient date — encoding/json's omitempty is a
+// no-op on a plain time.Time, which is why Status uses pointers.
+func TestStatusOmitsTimestampsThatNeverHappened(t *testing.T) {
+	srv := opsServer(t, &fakeOps{status: Status{Version: "dev"}})
+
+	resp, err := http.Get(srv.URL + "/api/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"next_run", "last_run", "last_success"} {
+		if strings.Contains(string(raw), `"`+field+`"`) {
+			t.Errorf("field %q present in a fresh status, want it absent: %s", field, raw)
+		}
+	}
+	var got Status
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.NextRun != nil || got.LastRun != nil || got.LastSuccess != nil {
+		t.Errorf("decoded status = %+v, want all three nil", got)
+	}
+}
+
+func TestCheckAllRunsEveryModuleAndOneByName(t *testing.T) {
+	fo := &fakeOps{results: []CheckResult{
+		{Kind: "source", Name: "es", OK: true, Millis: 12},
+		{Kind: "sink", Name: "phone", OK: false, Err: "401 Unauthorized", Millis: 40},
+	}}
+	srv := opsServer(t, fo)
+
+	code, results := postCheck(t, srv.URL, "application/json", `{}`)
+	if code != http.StatusOK || len(results) != 2 || results[1]["error"] != "401 Unauthorized" {
+		t.Fatalf("check-all: status %d, results %v", code, results)
+	}
+	if len(fo.checkCalls) != 1 || fo.checkCalls[0] != "" {
+		t.Errorf("Check called with %v, want one call with an empty module", fo.checkCalls)
+	}
+
+	code, _ = postCheck(t, srv.URL, "application/json", `{"module":"phone"}`)
+	if code != http.StatusOK || fo.checkCalls[len(fo.checkCalls)-1] != "phone" {
+		t.Errorf("single-module check: status %d, calls %v", code, fo.checkCalls)
+	}
+
+	// A bare POST (curl, or the button with no body) checks everything.
+	code, _ = postCheck(t, srv.URL, "", "")
+	if code != http.StatusOK || fo.checkCalls[len(fo.checkCalls)-1] != "" {
+		t.Errorf("bare POST: status %d, calls %v", code, fo.checkCalls)
+	}
+}
+
+// The check reaches every configured backend, so a cross-site page must not
+// be able to fire it, and a caller must not be able to hold the process open
+// past the endpoint's own bound.
+func TestCheckRefusesCrossSiteAndRespectsATimeout(t *testing.T) {
+	fo := &fakeOps{block: make(chan struct{})}
+	defer close(fo.block)
+	srv := opsServer(t, fo)
+
+	code, _ := postCheck(t, srv.URL, "application/json", `{}`, "Sec-Fetch-Site", "cross-site")
+	if code != http.StatusForbidden {
+		t.Errorf("cross-site POST: status %d, want 403", code)
+	}
+}
+
+func postCheck(t *testing.T, base, contentType, body string, headers ...string) (int, []map[string]any) {
+	t.Helper()
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/check", r)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out []map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+func TestNilOpsLeavesStatusAndCheckUnregistered(t *testing.T) {
+	st, _ := store.Open("", 10)
+	mux := http.NewServeMux()
+	Register(mux, Deps{Store: st})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	for _, path := range []string{"/api/status", "/api/check"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s with no Ops wired: status %d, want 404", path, resp.StatusCode)
+		}
+	}
+}
+
+// The route reaches every configured backend, so nothing on the LAN — not
+// only a browser, which the cross-origin guard already stops — should be
+// able to make the process re-probe faster than an operator can click.
+func TestCheckRefusesAnOverlappingCall(t *testing.T) {
+	fo := &fakeOps{block: make(chan struct{})}
+	srv := opsServer(t, fo)
+
+	done := make(chan int, 1)
+	go func() {
+		code, _ := postCheck(t, srv.URL, "application/json", `{}`)
+		done <- code
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for fo.calls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fo.calls() == 0 {
+		t.Fatal("the first check never started")
+	}
+
+	// postCheck decodes into a []map[string]any (the shape of a successful
+	// check-all); the 429 body is a plain {"error": "..."} object, which a
+	// list-shaped decode silently drops — the status code is what this
+	// checks, on purpose.
+	code, _ := postCheck(t, srv.URL, "application/json", `{}`)
+	if code != http.StatusTooManyRequests {
+		t.Errorf("overlapping check: status %d, want 429", code)
+	}
+
+	close(fo.block)
+	if got := <-done; got != http.StatusOK {
+		t.Errorf("the first check finished with status %d, want 200", got)
+	}
+	// Released: a third call must succeed.
+	code, _ = postCheck(t, srv.URL, "application/json", `{}`)
+	if code != http.StatusOK {
+		t.Errorf("check after the first one finished: status %d, want 200", code)
 	}
 }

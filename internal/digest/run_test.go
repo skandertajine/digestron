@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -16,11 +18,15 @@ type fakeSource struct {
 	findings []Finding
 	err      error
 	delay    time.Duration
+	hook     func() // called from inside Collect, e.g. to cancel the run's context
 }
 
 func (f fakeSource) Name() string { return f.name }
 
 func (f fakeSource) Collect(ctx context.Context, _ Window) ([]Finding, error) {
+	if f.hook != nil {
+		f.hook()
+	}
 	if f.delay > 0 {
 		select {
 		case <-ctx.Done():
@@ -418,4 +424,59 @@ func TestRunWithoutScrubKeepsErrorsAsTheyAre(t *testing.T) {
 	if got := r.Run(context.Background()).Stats[0].Err; got != "plain failure" {
 		t.Errorf("error = %q, want it untouched when no scrubber is set", got)
 	}
+}
+
+// A run cancelled while collecting must not spend a prompt or send a digest
+// the operator just abandoned.
+func TestRunStopsAtTheStageItWasCancelledIn(t *testing.T) {
+	llm := &countingLLM{}
+	sink := &fakeSink{name: "phone"}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &Runner{
+		Title: "t", Window: time.Hour, Log: quietLogger(),
+		Sources: []RunSource{{Source: fakeSource{name: "es", hook: cancel}}},
+		LLM:     llm,
+		Sinks:   []RunSink{{Sink: sink}},
+	}
+	report := r.Run(ctx)
+
+	if llm.calls.Load() != 0 {
+		t.Errorf("llm called %d times, want 0: the run was cancelled before summarizing", llm.calls.Load())
+	}
+	if len(sink.received) != 0 {
+		t.Error("a sink received a report from a cancelled run")
+	}
+	if len(report.Stats) != 1 || report.Stats[0].Source != "es" {
+		t.Errorf("the collected stats must still be in the report: %+v", report.Stats)
+	}
+}
+
+func TestRunPhaseCallbackReflectsEachStage(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	r := &Runner{
+		Title: "t", Window: time.Hour, Log: quietLogger(), LLMTimeout: time.Second,
+		Sources: []RunSource{{Source: fakeSource{name: "es"}}},
+		LLM:     fakeLLM{resp: Response{Text: "ok", Model: "m"}},
+		Sinks:   []RunSink{{Sink: &fakeSink{name: "phone"}}},
+		OnPhase: func(p string) { mu.Lock(); seen = append(seen, p); mu.Unlock() },
+	}
+	r.Run(context.Background())
+	if want := []string{"collecting", "summarizing", "delivering"}; !slices.Equal(seen, want) {
+		t.Errorf("phases = %v, want %v in order", seen, want)
+	}
+}
+
+func TestRunWithoutOnPhaseIsUnaffected(_ *testing.T) {
+	r := &Runner{Title: "t", Window: time.Hour, Log: quietLogger()}
+	r.Run(context.Background()) // must not panic with OnPhase nil
+}
+
+// countingLLM counts calls without needing a full fakeLLM setup.
+type countingLLM struct{ calls atomic.Int32 }
+
+func (c *countingLLM) Name() string { return "counting" }
+func (c *countingLLM) Complete(context.Context, Request) (Response, error) {
+	c.calls.Add(1)
+	return Response{Text: "x", Model: "m"}, nil
 }

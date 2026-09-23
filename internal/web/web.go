@@ -5,12 +5,14 @@
 package web
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/skandertajine/digestron/internal/logring"
@@ -24,6 +26,10 @@ var indexHTML []byte
 // manual — is already executing. The page shows it as "already running".
 var ErrRunInProgress = errors.New("a run is already in progress")
 
+// ErrNotRunning is what a Trigger's Cancel returns when there is nothing to
+// cancel.
+var ErrNotRunning = errors.New("no run is in progress")
+
 // Trigger starts a digest run outside the schedule. Start must return at
 // once: a run can spend two minutes on the LLM, longer than the proxy in
 // front of this page will hold a request. The page polls Status until
@@ -33,6 +39,8 @@ var ErrRunInProgress = errors.New("a run is already in progress")
 type Trigger interface {
 	Start(dry bool) error
 	Status() RunStatus
+	// Cancel stops the run in flight, or reports ErrNotRunning when idle.
+	Cancel() error
 }
 
 // RunStatus is what the page polls while a run is in flight. ID and Kind are
@@ -44,6 +52,55 @@ type RunStatus struct {
 	StartedAt time.Time  `json:"started_at"`
 	ID        string     `json:"id,omitempty"`
 	Kind      store.Kind `json:"kind,omitempty"`
+	// Phase is what the run is doing right now: "collecting", "summarizing"
+	// or "delivering". Empty until the run reports its first phase.
+	Phase string `json:"phase,omitempty"`
+}
+
+// Status is the header strip's single read: build, schedule, the last two
+// outcomes and how much of the process's memory budget the rings are using.
+// Everything here is safe on an unauthenticated page: no setting, no secret,
+// no address more specific than what /metrics already exposes.
+type Status struct {
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	GoVersion string `json:"go_version"`
+
+	StartedAt time.Time `json:"started_at"`
+	Cron      string    `json:"cron,omitempty"`
+	Timezone  string    `json:"timezone,omitempty"`
+	// NextRun, LastRun and LastSuccess are pointers so that "never happened"
+	// serializes as an absent field, not as Go's zero time.Time (which
+	// encoding/json always renders as "0001-01-01T00:00:00Z" — omitempty is a
+	// no-op on a struct-typed field, so a plain time.Time here would have
+	// made a fresh process's "no run yet" look like a real, ancient timestamp
+	// to anything parsing it).
+	NextRun     *time.Time `json:"next_run,omitempty"`
+	LastRun     *time.Time `json:"last_run,omitempty"`
+	LastSuccess *time.Time `json:"last_success,omitempty"`
+
+	LogRecords    int    `json:"log_records"`
+	LogBytes      int    `json:"log_bytes"`
+	Goroutines    int    `json:"goroutines"`
+	MemAllocBytes uint64 `json:"mem_alloc_bytes"`
+}
+
+// CheckResult is one module's answer to a probe.
+type CheckResult struct {
+	Kind    string `json:"kind"` // source | sink | llm
+	Name    string `json:"name"`
+	OK      bool   `json:"ok"`
+	Skipped bool   `json:"skipped,omitempty"` // the module has no cheap probe
+	Err     string `json:"error,omitempty"`
+	Millis  int64  `json:"ms"`
+}
+
+// Ops is the header strip's data and the check-all button. Check probes every
+// configured module (or one, by name) with its own timeout, in parallel, and
+// returns as soon as they are all done or the context given to it expires.
+type Ops interface {
+	Status() Status
+	Check(ctx context.Context, module string) []CheckResult
 }
 
 // LogSource is the process's recent log lines and its stderr level.
@@ -60,21 +117,23 @@ type Deps struct {
 	Store   *store.Store
 	Trigger Trigger
 	Logs    LogSource
+	Ops     Ops
 }
 
 type runSummary struct {
-	ID               string    `json:"id"`
-	GeneratedAt      time.Time `json:"generated_at"`
-	Title            string    `json:"title"`
-	Verdict          string    `json:"verdict"`
-	Findings         int       `json:"findings"`
-	SourcesFailed    int       `json:"sources_failed"`
-	SinksFailed      int       `json:"sinks_failed"`
-	Model            string    `json:"model,omitempty"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	LLMMillis        int64     `json:"llm_ms"`
-	Summary          string    `json:"summary"`
+	ID               string     `json:"id"`
+	GeneratedAt      time.Time  `json:"generated_at"`
+	Title            string     `json:"title"`
+	Kind             store.Kind `json:"kind,omitempty"`
+	Verdict          string     `json:"verdict"`
+	Findings         int        `json:"findings"`
+	SourcesFailed    int        `json:"sources_failed"`
+	SinksFailed      int        `json:"sinks_failed"`
+	Model            string     `json:"model,omitempty"`
+	PromptTokens     int        `json:"prompt_tokens"`
+	CompletionTokens int        `json:"completion_tokens"`
+	LLMMillis        int64      `json:"llm_ms"`
+	Summary          string     `json:"summary"`
 }
 
 func Register(mux *http.ServeMux, d Deps) {
@@ -102,6 +161,7 @@ func Register(mux *http.ServeMux, d Deps) {
 				ID:               e.ID,
 				GeneratedAt:      r.GeneratedAt,
 				Title:            r.Title,
+				Kind:             e.Kind,
 				Verdict:          r.Verdict.String(),
 				Findings:         len(r.Findings),
 				Model:            r.LLM.Model,
@@ -163,12 +223,63 @@ func Register(mux *http.ServeMux, d Deps) {
 				writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "dry": dry})
 			}
 		})))
+
+		// The button's "stop" side. 204 when it was told to stop (it may
+		// still take a moment to actually unwind); 404 when nothing runs.
+		mux.Handle("DELETE /api/run", cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			switch err := trig.Cancel(); {
+			case errors.Is(err, ErrNotRunning):
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			case err != nil:
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			default:
+				w.WriteHeader(http.StatusNoContent)
+			}
+		})))
 	}
 
 	if d.Logs != nil {
 		registerLogs(mux, d.Logs, cop)
 	}
+
+	if d.Ops != nil {
+		mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, d.Ops.Status())
+		})
+
+		// Reaches every configured backend, so it goes through the same guard
+		// as the mutating routes even though it changes nothing here: a
+		// cross-site page must not be able to use this process to probe the
+		// operator's LAN or time its responses. checking is a one-at-a-time
+		// gate, not queued: an overlapping call is refused rather than made
+		// to wait, since a caller on the LAN (the cop guard only stops a
+		// browser) could otherwise keep every backend under permanent probe
+		// load with no upper bound on concurrency.
+		var checking atomic.Bool
+		mux.Handle("POST /api/check", cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Module string `json:"module"`
+			}
+			if r.ContentLength != 0 || r.Header.Get("Content-Type") != "" {
+				if !readJSON(w, r, &body) {
+					return
+				}
+			}
+			if !checking.CompareAndSwap(false, true) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "a check is already in progress"})
+				return
+			}
+			defer checking.Store(false)
+			ctx, cancel := context.WithTimeout(r.Context(), checkTotalTimeout)
+			defer cancel()
+			writeJSON(w, http.StatusOK, d.Ops.Check(ctx, body.Module))
+		})))
+	}
 }
+
+// checkTotalTimeout bounds one POST /api/check call: modules are probed in
+// parallel, so this is per call, not per module.
+const checkTotalTimeout = 20 * time.Second
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

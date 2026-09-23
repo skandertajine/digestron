@@ -47,6 +47,18 @@ type Runner struct {
 	// time.Now. A caller that wants to know the run's ID before it starts
 	// (so it can tag the log lines with it) fixes the instant here.
 	Now func() time.Time
+
+	// OnPhase, when set, is called as the run enters each stage: "collecting",
+	// "summarizing", "delivering". A caller driving a status display uses it
+	// to say what a run in progress is doing; it is never required to make a
+	// run correct.
+	OnPhase func(phase string)
+}
+
+func (r *Runner) phase(p string) {
+	if r.OnPhase != nil {
+		r.OnPhase(p)
+	}
 }
 
 func (r *Runner) scrub(s string) string {
@@ -69,12 +81,30 @@ func (r *Runner) Run(ctx context.Context) Report {
 	r.Log.Debug("run started", "window_from", report.Window.From, "window_to", report.Window.To,
 		"sources", len(r.Sources), "sinks", len(r.Sinks), "llm", r.LLM != nil)
 
+	r.phase("collecting")
 	report.Findings, report.Stats = r.collect(ctx, report.Window)
 	sortFindings(report.Findings)
 	report.Verdict = Verdict(report.Findings)
 
+	// A cancelled run stops here: the LLM and the sinks are still to come,
+	// and running them on a context that is already done would burn a prompt
+	// or send a digest the operator just told the run to abandon.
+	if ctx.Err() != nil {
+		r.Log.Warn("run cancelled", "stage", "collect")
+		report.Cancelled = true
+		return report
+	}
+
+	r.phase("summarizing")
 	r.summarize(ctx, &report)
 
+	if ctx.Err() != nil {
+		r.Log.Warn("run cancelled", "stage", "summarize")
+		report.Cancelled = true
+		return report
+	}
+
+	r.phase("delivering")
 	report.Sinks = r.deliver(ctx, report)
 	return report
 }

@@ -105,6 +105,13 @@ type Report struct {
 	LLM         LLMStats      `json:"llm"`
 	Sinks       []SinkStats   `json:"sinks,omitempty"`
 	GeneratedAt time.Time     `json:"generated_at"`
+	// Cancelled is set by Run itself, at the exact point it notices its
+	// context is done and stops early — never inferred afterwards from a
+	// second, separately-timed read of the context. A caller that checked
+	// ctx.Err() only after Run returned could see a context cancelled a
+	// moment too late, after the run had already delivered in full, and
+	// wrongly mark a delivered digest as cancelled.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // Request is the LLM input: System carries instructions, User carries the
