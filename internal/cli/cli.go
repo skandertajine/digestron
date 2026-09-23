@@ -6,9 +6,12 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
+	"github.com/skandertajine/digestron/internal/logring"
+	"github.com/skandertajine/digestron/internal/redact"
 	"github.com/skandertajine/digestron/internal/version"
 )
 
@@ -44,17 +47,31 @@ commands:
 `)
 }
 
-func newLogger(level string) *slog.Logger {
-	var l slog.Level
-	switch level {
-	case "debug":
-		l = slog.LevelDebug
-	case "warn":
-		l = slog.LevelWarn
-	case "error":
-		l = slog.LevelError
-	default:
+// Ring bounds: about 25 lines per run with the debug lines, so this is days of
+// history, and small enough to fit a 128Mi pod next to everything else.
+const (
+	logMaxRecords = 4000
+	logMaxBytes   = 2 << 20
+)
+
+// newLogger builds the process logger. stderr keeps printing exactly what the
+// configured level asks for, with configured secrets replaced: an upstream
+// that echoes a token into an error must not put it in `kubectl logs` any more
+// than in the UI. The ring behind it keeps every level for the web UI, and the
+// returned LevelVar changes what stderr prints at runtime.
+func newLogger(level string, scrub *redact.Scrubber) (*slog.Logger, *logring.Ring, *slog.LevelVar) {
+	return newLoggerTo(os.Stderr, level, scrub)
+}
+
+func newLoggerTo(w io.Writer, level string, scrub *redact.Scrubber) (*slog.Logger, *logring.Ring, *slog.LevelVar) {
+	lv := new(slog.LevelVar)
+	l, ok := logring.ParseLevel(level)
+	if !ok {
 		l = slog.LevelInfo
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
+	lv.Set(l)
+	ring := logring.New(logMaxRecords, logMaxBytes, scrub.Scrub)
+	// The child handler prints whatever it is handed; the fan-out decides.
+	out := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: scrub.ReplaceAttr})
+	return slog.New(ring.Handler(out, lv)), ring, lv
 }

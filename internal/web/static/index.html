@@ -148,6 +148,38 @@
   .btn:hover:not(:disabled) { transform: translateY(-1px); }
   .btn:disabled { opacity: .55; cursor: progress; font-family: var(--mono); font-weight: 500; }
 
+  .logs-panel { max-width: 1400px; margin: 0 auto 2rem; padding: 0 1.5rem; }
+  .logs-panel .panel { overflow: hidden; }
+  .logs-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; padding: .8rem 1.1rem; border-bottom: 1px solid var(--border); }
+  .logs-head h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .seg button { font: 600 .7rem/1 var(--mono); text-transform: uppercase; background: transparent; color: var(--muted); border: 0; padding: .45rem .75rem; cursor: pointer; }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: rgba(99,102,241,.24); color: #fff; }
+  .logs-head input[type=search], .logs-head select {
+    font: .78rem var(--mono); color: var(--text); background: rgba(255,255,255,.04);
+    border: 1px solid var(--border); border-radius: 999px; padding: .4rem .8rem; outline: none;
+  }
+  .logs-head input[type=search] { min-width: 12rem; }
+  .logs-head input[type=search]:focus, .logs-head select:focus { border-color: rgba(99,102,241,.6); }
+  .logs-head select option { background: #12141c; }
+  .runtag { font: .74rem var(--mono); color: var(--accent2); background: rgba(34,211,238,.10); border: 1px solid rgba(34,211,238,.28); border-radius: 999px; padding: .28rem .35rem .28rem .7rem; }
+  .runtag button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0 .35rem; }
+  .logs-note { padding: .45rem 1.1rem; color: var(--warning); font: .75rem var(--mono); border-bottom: 1px solid var(--border); }
+  .logs-body { font: 12px/1.6 var(--mono); max-height: 46vh; overflow: auto; padding: .4rem 0; }
+  .log-row { display: grid; grid-template-columns: 6.4rem 3.4rem 1fr; gap: .7rem; padding: .05rem 1.1rem; }
+  .log-row:hover { background: var(--surface-hover); }
+  .log-row .t { color: var(--muted-2); }
+  .log-row .lv { font-weight: 700; }
+  .lv-DEBUG { color: var(--muted-2); } .lv-INFO { color: var(--info); } .lv-WARN { color: var(--warning); } .lv-ERROR { color: var(--critical); }
+  .log-row .msg { word-break: break-word; }
+  .log-row .attrs { color: var(--muted); word-break: break-word; }
+  .log-row .attrs b { color: var(--muted-2); font-weight: 500; }
+  .log-row a.rtag, .logs-link { color: var(--accent2); cursor: pointer; text-decoration: none; }
+  .log-row a.rtag { margin-left: .5rem; font-size: .72rem; }
+  .logs-link:hover, .log-row a.rtag:hover { text-decoration: underline; }
+  .logs-empty { padding: 2rem 1.1rem; text-align: center; color: var(--muted-2); font-family: var(--sans); }
+
   @media (prefers-reduced-motion: reduce) {
     .dot, .run-card { animation: none !important; }
     * { transition: none !important; }
@@ -193,6 +225,30 @@
   </section>
 </main>
 
+<section class="logs-panel" aria-label="process log">
+  <div class="panel">
+    <div class="logs-head">
+      <h2>process log</h2>
+      <div class="seg" id="log-levels" role="group" aria-label="lowest level shown">
+        <button type="button" data-level="debug">debug</button>
+        <button type="button" data-level="info" class="on">info</button>
+        <button type="button" data-level="warn">warn</button>
+        <button type="button" data-level="error">error</button>
+      </div>
+      <input type="search" id="log-q" placeholder="filter text" aria-label="filter log text" autocomplete="off" spellcheck="false">
+      <span class="runtag" id="log-run" hidden></span>
+      <label class="check"><input type="checkbox" id="log-follow" checked> follow</label>
+      <label class="check" title="what kubectl logs prints. The page always keeps every level.">stderr
+        <select id="log-stderr" aria-label="level printed on stderr">
+          <option>debug</option><option>info</option><option>warn</option><option>error</option>
+        </select>
+      </label>
+    </div>
+    <div class="logs-note" id="log-note" hidden></div>
+    <div class="logs-body" id="log-body"></div>
+  </div>
+</section>
+
 <script>
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const sevColor = v => ({info: "var(--info)", warning: "var(--warning)", critical: "var(--critical)"}[v] || "var(--ok)");
@@ -231,7 +287,7 @@ function renderCard(r) {
     <div class="run-card ${r.id === selected ? "selected" : ""}" style="--sev:${sevColor(r.verdict)}" data-id="${esc(r.id)}">
       <div class="row1">${pill(r.verdict)}<time>${fmtTime(r.generated_at)}</time></div>
       <div class="summary">${esc((r.summary || "no summary").slice(0, 140))}</div>
-      <div class="meta">${model}${tok}<span>${r.findings} findings</span>${fails.join("")}</div>
+      <div class="meta">${model}${tok}<span>${r.findings} findings</span>${fails.join("")}<a class="logs-link" data-run="${esc(r.id)}" title="show only this run's log lines">logs</a></div>
     </div>`;
 }
 
@@ -252,6 +308,8 @@ async function refresh() {
 
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
     el.addEventListener("click", () => show(el.dataset.id)));
+  document.querySelectorAll(".logs-link[data-run]").forEach(el =>
+    el.addEventListener("click", ev => { ev.stopPropagation(); setLogRun(el.dataset.run, true); }));
 }
 
 async function show(id) {
@@ -386,6 +444,204 @@ runBtn.addEventListener("click", async () => {
   }
   watchRun();
 });
+
+// Process log. The server keeps every level in a ring; the page asks for
+// what it wants to see and follows a cursor, so a poll costs one small
+// request. Changing a filter starts a new read from the top: the generation
+// counter drops any response that was still in flight for the old filter.
+const LOG_CAP = 2000;
+const logs = {
+  level: "info", q: "", run: "", since: 0, rows: [], follow: true,
+  gen: 0,        // bumped by every filter change: a response for an older one is dropped
+  inflight: -1,  // the gen of the fetch in flight, -1 when none: never two with the same cursor
+  boot: "",      // the ring's id; it changes when the process restarts
+  painted: false, lost: 0, restarted: false, err: false,
+};
+const logBody = document.getElementById("log-body");
+const logNote = document.getElementById("log-note");
+const logFollow = document.getElementById("log-follow");
+const logStderr = document.getElementById("log-stderr");
+
+function logNoteText(msg) { logNote.hidden = !msg; logNote.textContent = msg || ""; }
+
+// The note stays until the filters change: it reports something that already
+// happened (lines evicted, a restart), and a poll that comes back clean must
+// not wipe it two seconds later.
+function updateLogNote() {
+  const parts = [];
+  if (logs.err) parts.push("log unavailable, retrying");
+  if (logs.restarted) parts.push("the process restarted: showing its log from the start");
+  if (logs.lost) parts.push(`${logs.lost} lines were evicted before they could be read`);
+  logNoteText(parts.join(" · "));
+}
+
+function fmtLogTime(t) {
+  const d = new Date(t), p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// A run ID is its start instant in UTC; show it in the same local time as the
+// lines beside it, or the tag and the timestamps disagree by the UTC offset.
+function runLabel(id) {
+  const d = new Date(id);
+  if (isNaN(d)) return String(id).slice(11, 19);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function renderLogRow(r) {
+  const attrs = Object.entries(r.attrs || {}).map(([k, v]) => `<b>${esc(k)}</b>=${esc(v)}`).join(" ");
+  const tag = (r.run && !logs.run)
+    ? `<a class="rtag" data-run="${esc(r.run)}" title="only this run">${esc(runLabel(r.run))}</a>` : "";
+  return `<div class="log-row"><span class="t">${fmtLogTime(r.t)}</span>` +
+    `<span class="lv lv-${esc(r.level)}">${esc(r.level.slice(0, 5))}</span>` +
+    `<span><span class="msg">${esc(r.msg)}</span>${tag}<span class="attrs"> ${attrs}</span></span></div>`;
+}
+
+// Full paint: after a filter change or a restart, and for the first page, which
+// decides between rows and the empty-state message.
+function paintLogs() {
+  const empty = logs.run
+    ? "no lines retained for this run: the log lives in memory and starts empty when the process restarts"
+    : "no log lines match";
+  logBody.innerHTML = logs.rows.map(renderLogRow).join("") || `<div class="logs-empty">${esc(empty)}</div>`;
+  logs.painted = true;
+  if (logs.follow) logBody.scrollTop = logBody.scrollHeight;
+}
+
+// Append only what is new. Rebuilding the whole list on every poll drops a text
+// selection the operator is copying from, and once the list is capped it slides
+// the lines being read upward by however many were trimmed.
+function appendLogs(records) {
+  const last = logs.rows.length ? logs.rows[logs.rows.length - 1].seq : 0;
+  const fresh = records.filter(r => r.seq > last); // a page that arrives twice adds nothing
+  if (!logs.painted) { logs.rows = fresh.slice(-LOG_CAP); paintLogs(); return; }
+  if (!fresh.length) return;
+  logs.rows = logs.rows.concat(fresh).slice(-LOG_CAP);
+  const empty = logBody.querySelector(".logs-empty");
+  if (empty) empty.remove();
+  logBody.insertAdjacentHTML("beforeend", fresh.map(renderLogRow).join(""));
+  let trimmed = 0;
+  while (logBody.children.length > LOG_CAP) {
+    trimmed += logBody.firstElementChild.offsetHeight;
+    logBody.firstElementChild.remove();
+  }
+  if (logs.follow) logBody.scrollTop = logBody.scrollHeight;
+  else if (trimmed) logBody.scrollTop = Math.max(0, logBody.scrollTop - trimmed);
+}
+
+function logQuery() {
+  const p = new URLSearchParams({ level: logs.level, limit: "500" });
+  if (logs.since) p.set("since", logs.since);
+  if (logs.q) p.set("q", logs.q);
+  if (logs.run) p.set("run", logs.run);
+  return "api/logs?" + p;
+}
+
+async function pollLogs() {
+  if (logs.inflight === logs.gen || document.hidden) return;
+  const gen = logs.gen;
+  logs.inflight = gen;
+  let more = false;
+  try {
+    const resp = await fetch(logQuery());
+    if (!resp.ok) throw new Error("status " + resp.status);
+    const page = await resp.json();
+    if (gen !== logs.gen) return; // the filters changed while this was in flight
+    if (logs.boot && page.boot !== logs.boot) {
+      // The process restarted: its ring numbers from 1 again, so the cursor
+      // held here means nothing. Adopting the new, smaller one would skip the
+      // new process's first lines, the ones that explain the restart.
+      logs.boot = page.boot;
+      logs.since = 0; logs.rows = []; logs.lost = 0; logs.restarted = true;
+      logs.painted = false;
+      logBody.innerHTML = "";
+      more = true;
+    } else {
+      logs.boot = page.boot;
+      logs.since = page.seq;
+      logs.lost += page.dropped || 0;
+      appendLogs(page.records);
+      more = page.records.length >= 500; // a full page: there is more waiting
+    }
+    logs.err = false;
+    if (document.activeElement !== logStderr) logStderr.value = page.level;
+  } catch (e) {
+    logs.err = true;
+  } finally {
+    if (logs.inflight === gen) logs.inflight = -1; // a stale poll must not release a newer one's slot
+    updateLogNote();
+  }
+  if (more) pollLogs();
+}
+
+function resetLogs() {
+  logs.gen++;
+  logs.since = 0;
+  logs.rows = [];
+  logs.painted = false;
+  logs.lost = 0;
+  logs.restarted = false;
+  logBody.innerHTML = "";
+  updateLogNote();
+  pollLogs();
+}
+
+function setLogLevel(level) {
+  logs.level = level;
+  document.querySelectorAll("#log-levels button").forEach(b => b.classList.toggle("on", b.dataset.level === level));
+}
+
+function setLogRun(id, reveal) {
+  logs.run = id || "";
+  const chip = document.getElementById("log-run");
+  chip.hidden = !logs.run;
+  chip.innerHTML = logs.run
+    ? `run ${esc(runLabel(logs.run))}<button type="button" title="show every run" aria-label="clear run filter">✕</button>` : "";
+  if (logs.run) setLogLevel("debug"); // a run's own lines, all of them
+  resetLogs();
+  if (reveal) document.getElementById("log-body").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+document.querySelectorAll("#log-levels button").forEach(b =>
+  b.addEventListener("click", () => { setLogLevel(b.dataset.level); resetLogs(); }));
+let logTyping;
+document.getElementById("log-q").addEventListener("input", ev => {
+  clearTimeout(logTyping);
+  logTyping = setTimeout(() => { logs.q = ev.target.value.trim(); resetLogs(); }, 250);
+});
+document.getElementById("log-run").addEventListener("click", ev => { if (ev.target.closest("button")) setLogRun(""); });
+logBody.addEventListener("click", ev => {
+  const tag = ev.target.closest("a.rtag");
+  if (tag) setLogRun(tag.dataset.run);
+});
+logFollow.addEventListener("change", () => {
+  logs.follow = logFollow.checked;
+  if (logs.follow) logBody.scrollTop = logBody.scrollHeight;
+});
+logBody.addEventListener("scroll", () => { // scrolling up means "stop following"
+  if (logs.follow && logBody.scrollHeight - logBody.scrollTop - logBody.clientHeight > 40) {
+    logs.follow = false;
+    logFollow.checked = false;
+  }
+});
+logStderr.addEventListener("change", async () => {
+  try {
+    const resp = await fetch("api/logs/level", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level: logStderr.value }),
+    });
+    if (!resp.ok) throw new Error("status " + resp.status);
+    flash("stderr level: " + logStderr.value);
+  } catch (e) {
+    flash("could not change the stderr level");
+  }
+  pollLogs();
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLogs(); });
+
+resetLogs();
+const logTimer = setInterval(pollLogs, 2000);
 
 refresh();
 watchRun(); // the page may open while the hourly run is in flight

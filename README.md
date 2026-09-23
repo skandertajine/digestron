@@ -57,6 +57,40 @@ curl -X POST 'http://digestron-dev.home/api/run'          # dry: sources + LLM, 
 curl -X POST 'http://digestron-dev.home/api/run?dry=0'    # delivered, recorded
 ```
 
+### Process log in the UI
+
+The page ends with the process log: every line digestron writes, debug
+included, kept in a bounded in-memory ring (4000 lines or 2 MiB, oldest
+evicted first). Filter by level, text or run; the *logs* link on a run card
+shows only that run's lines, and every line of a run carries its ID, known
+before the run starts. `kubectl logs` prints exactly what it always did: the
+*stderr* selector changes what stderr prints until the next restart, and never
+what the page can see.
+
+```
+GET /api/logs?since=<seq>&level=<debug|info|warn|error>&run=<id>&q=<text>&limit=<n>
+PUT /api/logs/level   {"level": "debug"}
+```
+
+Configured secrets are replaced by `<redacted>` wherever text leaves the
+process: these lines, `kubectl logs`, and the error texts stored in a run's
+report (`history.json`, `/api/runs/{id}` and the digest the sinks receive),
+because an upstream that rejects a request often quotes it back inside its
+error. That covers any `password`, `token` or `api_key` setting, every header
+value (a `Bearer x` value also hides `x` alone), a password or query token in a
+URL, the whole URL of a webhook sink (it is the credential), the `user:password`
+pair a Basic header carries, and the JSON-escaped, URL-encoded and base64 forms
+an upstream echoes. Values under 8 bytes are not hidden. Prompts, query bodies
+and replies are never logged, only their sizes.
+
+The ring is per process. When the process restarts the page notices, says so,
+and shows the new process's log from its first line.
+
+Every run is stored in `history.json` with a `kind`: `schedule` (the cron tick),
+`manual` (the button, delivered) or `test` (a dry run). Test runs keep their
+own budget, a quarter of `history.keep` and at most 50, so an afternoon of
+dry runs cannot push the hourly digests out of the history.
+
 The page has no login, like `/metrics`. Browsers cannot press the button on
 behalf of another site (cross-origin `POST`s are refused with `403`); anything
 that is not a browser, curl included, is not affected by that guard, so keep

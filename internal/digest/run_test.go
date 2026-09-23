@@ -313,3 +313,109 @@ func TestSourceProblemsSeparatesFailedFromPartial(t *testing.T) {
 		t.Errorf("SourceProblems() = %q, want empty when every source answered", p)
 	}
 }
+
+// A caller that wants a run's ID before the run starts fixes the instant here:
+// the ID is derived from GeneratedAt, and the log lines of the run are tagged
+// with it while the run is still going.
+func TestRunUsesTheInjectedClock(t *testing.T) {
+	fixed := time.Date(2026, 9, 22, 1, 10, 0, 3100, time.UTC)
+	r := &Runner{Title: "t", Window: time.Hour, Log: quietLogger(), Now: func() time.Time { return fixed }}
+
+	report := r.Run(context.Background())
+
+	if !report.GeneratedAt.Equal(fixed) || !report.Window.To.Equal(fixed) {
+		t.Errorf("GeneratedAt %v, Window.To %v; want both %v", report.GeneratedAt, report.Window.To, fixed)
+	}
+	if !report.Window.From.Equal(fixed.Add(-time.Hour)) {
+		t.Errorf("Window.From = %v, want one hour before the injected instant", report.Window.From)
+	}
+}
+
+func TestRunWithoutClockUsesTimeNow(t *testing.T) {
+	before := time.Now()
+	report := (&Runner{Title: "t", Window: time.Hour, Log: quietLogger()}).Run(context.Background())
+	if report.GeneratedAt.Before(before) || time.Since(report.GeneratedAt) > time.Minute {
+		t.Errorf("GeneratedAt = %v, want about now", report.GeneratedAt)
+	}
+}
+
+// The debug lines say what happened and how long it took. They never carry a
+// finding, a prompt or a reply: the README promises that logs hold no
+// content, and the UI now shows them to anyone who opens the page.
+func TestRunLogsTheStepsAndNeverTheContent(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := &Runner{
+		Title: "t", Window: time.Hour, Log: log, LLMTimeout: time.Second,
+		Sources: []RunSource{{Source: fakeSource{name: "es", findings: []Finding{
+			{Source: "es", Title: "FINDING-TITLE-MARKER", Count: 3, Details: map[string]int{"10.9.8.7": 3}}}}}},
+		LLM:   fakeLLM{resp: Response{Text: "REPLY-TEXT-MARKER", Model: "m", PromptTokens: 5, CompletionTokens: 2}},
+		Sinks: []RunSink{{Sink: &fakeSink{name: "phone"}}},
+	}
+	r.Run(context.Background())
+
+	out := buf.String()
+	for _, step := range []string{"run started", "collecting", "source done", "llm request", "llm response", "delivering", "sink done"} {
+		if !strings.Contains(out, `msg="`+step+`"`) && !strings.Contains(out, "msg="+step) {
+			t.Errorf("no %q line in the debug output:\n%s", step, out)
+		}
+	}
+	for _, content := range []string{"FINDING-TITLE-MARKER", "REPLY-TEXT-MARKER", "10.9.8.7"} {
+		if strings.Contains(out, content) {
+			t.Errorf("content %q reached the log:\n%s", content, out)
+		}
+	}
+	if !strings.Contains(out, "reply_bytes=17") || !strings.Contains(out, "prompt_tokens=5") {
+		t.Errorf("the llm response line must carry sizes and token counts:\n%s", out)
+	}
+}
+
+// An upstream that rejects a request often quotes it back, and every error
+// the runner records goes on to the sinks, to history.json and to the UI. The
+// secret must not get past the runner.
+func TestRunScrubsErrorsAndSummaryBeforeTheyEnterTheReport(t *testing.T) {
+	const secret = "SENTINEL-token-12345"
+	scrub := func(s string) string { return strings.ReplaceAll(s, secret, "<redacted>") }
+	sink := &fakeSink{name: "phone", err: errors.New("401 Unauthorized: " + secret)}
+
+	failing := &Runner{
+		Title: "t", Window: time.Hour, Log: quietLogger(), Scrub: scrub, LLMTimeout: time.Second,
+		Sources: []RunSource{{Source: fakeSource{name: "es", err: errors.New(`query "x": 401 {"got":"` + secret + `"}`)}}},
+		LLM:     fakeLLM{err: errors.New("llm 500: " + secret)},
+		Sinks:   []RunSink{{Sink: sink}},
+	}
+	report := failing.Run(context.Background())
+
+	for what, text := range map[string]string{
+		"source error": report.Stats[0].Err,
+		"llm error":    report.LLM.Err,
+		"sink error":   report.Sinks[0].Err,
+	} {
+		if strings.Contains(text, secret) || !strings.Contains(text, "<redacted>") {
+			t.Errorf("%s = %q, want the secret replaced and the rest kept", what, text)
+		}
+	}
+	// What the sink was handed is what history and the phone get.
+	if got := sink.received[0].Stats[0].Err; strings.Contains(got, secret) {
+		t.Errorf("the sink received an unscrubbed source error: %q", got)
+	}
+	if got := RenderText(sink.received[0]); strings.Contains(got, secret) {
+		t.Errorf("the rendered digest carries the secret:\n%s", got)
+	}
+
+	chatty := &Runner{
+		Title: "t", Window: time.Hour, Log: quietLogger(), Scrub: scrub, LLMTimeout: time.Second,
+		LLM: fakeLLM{resp: Response{Text: "all quiet, token " + secret, Model: "m"}},
+	}
+	if got := chatty.Run(context.Background()).Summary; strings.Contains(got, secret) {
+		t.Errorf("the summary carries the secret: %q", got)
+	}
+}
+
+func TestRunWithoutScrubKeepsErrorsAsTheyAre(t *testing.T) {
+	r := &Runner{Title: "t", Window: time.Hour, Log: quietLogger(),
+		Sources: []RunSource{{Source: fakeSource{name: "es", err: errors.New("plain failure")}}}}
+	if got := r.Run(context.Background()).Stats[0].Err; got != "plain failure" {
+		t.Errorf("error = %q, want it untouched when no scrubber is set", got)
+	}
+}

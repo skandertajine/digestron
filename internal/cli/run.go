@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skandertajine/digestron/internal/digest"
+	"github.com/skandertajine/digestron/internal/store"
 )
 
 func runCmd(args []string) int {
@@ -30,7 +31,7 @@ func runCmd(args []string) int {
 	start := time.Now()
 	report := app.Runner.Run(ctx)
 	success := app.Record(report, time.Since(start))
-	if _, err := app.Store.Append(report); err != nil {
+	if _, err := app.Store.Append(report, store.KindSchedule); err != nil {
 		app.Log.Warn("history not persisted", "error", err)
 	}
 

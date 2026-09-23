@@ -15,10 +15,34 @@ import (
 	"github.com/skandertajine/digestron/internal/digest"
 )
 
+// Kind says why a run happened, which decides how long it is kept and how it
+// is read.
+type Kind string
+
+const (
+	// KindSchedule is a cron tick: the hourly digest.
+	KindSchedule Kind = "schedule"
+	// KindManual is the button pressed with the sinks on: a real digest that
+	// was delivered and recorded in the metrics.
+	KindManual Kind = "manual"
+	// KindTest is a dry run: sources and LLM, no sinks, no metrics.
+	KindTest Kind = "test"
+)
+
 type Entry struct {
-	ID     string        `json:"id"`
+	ID string `json:"id"`
+	// Kind is empty in history files written before it existed; Open reads
+	// those as schedule, which is what every run then was.
+	Kind   Kind          `json:"kind,omitempty"`
 	Report digest.Report `json:"report"`
 }
+
+// IDFor is the ID an entry gets for a report generated at t. It is exported
+// so a run can learn its ID before it starts, and tag its log lines with it.
+func IDFor(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// maxTestEntries bounds how many test runs are kept, whatever keep is.
+const maxTestEntries = 50
 
 type Store struct {
 	mu      sync.Mutex
@@ -47,16 +71,24 @@ func Open(path string, keep int) (*Store, error) {
 	if err := json.Unmarshal(raw, &s.entries); err != nil {
 		return nil, fmt.Errorf("store: corrupt history file %s: %w", path, err)
 	}
+	for i := range s.entries {
+		if s.entries[i].Kind == "" {
+			s.entries[i].Kind = KindSchedule
+		}
+	}
 	s.truncate()
 	return s, nil
 }
 
 // Append records a finished report and persists when a path is configured.
-func (s *Store) Append(r digest.Report) (Entry, error) {
+func (s *Store) Append(r digest.Report, kind Kind) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := Entry{ID: r.GeneratedAt.UTC().Format(time.RFC3339Nano), Report: r}
+	if kind == "" {
+		kind = KindSchedule
+	}
+	e := Entry{ID: IDFor(r.GeneratedAt), Kind: kind, Report: r}
 	s.entries = append(s.entries, e)
 	s.truncate()
 
@@ -88,10 +120,35 @@ func (s *Store) Get(id string) (Entry, bool) {
 	return Entry{}, false
 }
 
+// truncate keeps the last keep real digests (schedule and manual) and,
+// separately, the last few test runs. A busy afternoon of dry runs must not
+// be able to push the hourly digests out of the history.
 func (s *Store) truncate() {
-	if len(s.entries) > s.keep {
-		s.entries = s.entries[len(s.entries)-s.keep:]
+	keepTest := min(max(s.keep/4, 1), maxTestEntries)
+	var digests, test int
+	for _, e := range s.entries {
+		if e.Kind == KindTest {
+			test++
+		} else {
+			digests++
+		}
 	}
+	dropReal, dropTest := max(digests-s.keep, 0), max(test-keepTest, 0)
+	if dropReal == 0 && dropTest == 0 {
+		return
+	}
+	kept := s.entries[:0:0]
+	for _, e := range s.entries { // oldest first: drop from the front of each kind
+		switch {
+		case e.Kind == KindTest && dropTest > 0:
+			dropTest--
+		case e.Kind != KindTest && dropReal > 0:
+			dropReal--
+		default:
+			kept = append(kept, e)
+		}
+	}
+	s.entries = kept
 }
 
 // persist writes atomically: temp file in the same directory, then rename.

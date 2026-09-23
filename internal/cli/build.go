@@ -8,7 +8,9 @@ import (
 	"github.com/skandertajine/digestron/internal/config"
 	"github.com/skandertajine/digestron/internal/digest"
 	"github.com/skandertajine/digestron/internal/llm"
+	"github.com/skandertajine/digestron/internal/logring"
 	"github.com/skandertajine/digestron/internal/metrics"
+	"github.com/skandertajine/digestron/internal/redact"
 	"github.com/skandertajine/digestron/internal/sink"
 	"github.com/skandertajine/digestron/internal/source"
 	"github.com/skandertajine/digestron/internal/store"
@@ -19,14 +21,17 @@ const defaultModuleTimeout = 30 * time.Second
 
 // App is everything a subcommand needs, built once from the configuration.
 type App struct {
-	Cfg     *config.Config
-	Log     *slog.Logger
-	Metrics *metrics.Metrics
-	Store   *store.Store
-	Sources []digest.RunSource
-	Sinks   []digest.RunSink
-	LLM     digest.LLM // unwrapped, for check probes; nil with --no-llm
-	Runner  *digest.Runner
+	Cfg      *config.Config
+	Log      *slog.Logger
+	Logs     *logring.Ring    // every log line of this process, for the web UI
+	LogLevel *slog.LevelVar   // what stderr prints; changeable at runtime
+	Scrub    *redact.Scrubber // hides configured secrets from text that leaves the process
+	Metrics  *metrics.Metrics
+	Store    *store.Store
+	Sources  []digest.RunSource
+	Sinks    []digest.RunSink
+	LLM      digest.LLM // unwrapped, for check probes; nil with --no-llm
+	Runner   *digest.Runner
 }
 
 // Build loads the configuration and instantiates every module. Any invalid
@@ -36,12 +41,13 @@ func Build(cfgPath string, noLLM bool) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	log := newLogger(cfg.Log.Level)
+	scrub := redact.FromConfig(cfg)
+	log, ring, level := newLogger(cfg.Log.Level, scrub)
 
 	m := metrics.New()
 	m.SetBuildInfo(version.Version, version.Commit, runtime.Version())
 
-	app := &App{Cfg: cfg, Log: log, Metrics: m}
+	app := &App{Cfg: cfg, Log: log, Logs: ring, LogLevel: level, Scrub: scrub, Metrics: m}
 
 	for _, mc := range cfg.Sources {
 		s, err := source.Build(mc.Type, mc.Name, mc.Settings)
@@ -87,6 +93,7 @@ func Build(cfgPath string, noLLM bool) (*App, error) {
 		Sinks:      app.Sinks,
 		LLM:        runnerLLM,
 		Log:        log,
+		Scrub:      scrub.Scrub,
 	}
 	return app, nil
 }

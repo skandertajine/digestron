@@ -63,7 +63,11 @@ func serveCmd(args []string) int {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	web.Register(mux, app.Store, gate)
+	web.Register(mux, web.Deps{
+		Store:   app.Store,
+		Trigger: gate,
+		Logs:    logSource{ring: app.Logs, lv: app.LogLevel},
+	})
 
 	server := &http.Server{
 		Addr:              app.Cfg.Metrics.Listen,

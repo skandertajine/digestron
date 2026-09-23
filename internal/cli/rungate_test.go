@@ -14,6 +14,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/skandertajine/digestron/internal/digest"
+	"github.com/skandertajine/digestron/internal/logring"
 	"github.com/skandertajine/digestron/internal/metrics"
 	"github.com/skandertajine/digestron/internal/store"
 	"github.com/skandertajine/digestron/internal/web"
@@ -58,8 +59,13 @@ func gateApp(t *testing.T, src digest.Source, sk digest.Sink, llm digest.LLM) *A
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := &App{Log: log, Metrics: metrics.New(), Store: st}
+	// A real ring behind the logger, as in the process: the gate's log
+	// lines can then be read back and checked.
+	lv := new(slog.LevelVar)
+	lv.Set(slog.LevelDebug)
+	ring := logring.New(2000, 1<<20, nil)
+	log := slog.New(ring.Handler(slog.NewJSONHandler(io.Discard, nil), lv))
+	app := &App{Log: log, Logs: ring, LogLevel: lv, Metrics: metrics.New(), Store: st}
 	app.Runner = &digest.Runner{
 		Title: "digest", Window: time.Hour, Log: log,
 		Sources: []digest.RunSource{{Source: src, Timeout: 5 * time.Second}},
@@ -174,9 +180,10 @@ func TestRunGateDryRunHoldsBackThenReplaysTheTick(t *testing.T) {
 	if len(scheduled.Sinks) != 1 {
 		t.Error("the replayed run is a real digest and must be delivered")
 	}
-	if app.Runner.Title != "digest" || len(app.Runner.Sinks) != 1 || app.Runner.LLM == nil {
-		t.Errorf("a dry run mutated the shared Runner: title %q, %d sinks, llm %v",
-			app.Runner.Title, len(app.Runner.Sinks), app.Runner.LLM)
+	if app.Runner.Title != "digest" || len(app.Runner.Sinks) != 1 || app.Runner.LLM == nil ||
+		app.Runner.Now != nil || app.Runner.Log != app.Log {
+		t.Errorf("a run mutated the shared Runner: title %q, %d sinks, llm %v, clock set %v, logger swapped %v",
+			app.Runner.Title, len(app.Runner.Sinks), app.Runner.LLM, app.Runner.Now != nil, app.Runner.Log != app.Log)
 	}
 	// Only the delivered run counts. last_success_timestamp is what alerting
 	// reads, and a test must not be able to refresh it.
@@ -239,5 +246,101 @@ func TestRunGateScheduledRunIsUnchanged(t *testing.T) {
 	}
 	if g.Status().Running {
 		t.Error("the gate must be released after a scheduled run")
+	}
+}
+
+// The run's identity is announced while it is still going: the UI can show the
+// lines of a run that has not finished, and the ID it filters by is the one the
+// history will store the report under.
+func TestRunGateAnnouncesTheRunBeforeItStarts(t *testing.T) {
+	src := &gateSource{release: make(chan struct{})}
+	app := gateApp(t, src, &gateSink{}, &gateLLM{})
+	g := newRunGate(app)
+
+	if err := g.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the run to reach its source", func() bool { return src.calls.Load() == 1 })
+
+	st := g.Status()
+	if st.ID == "" || st.Kind != store.KindTest {
+		t.Fatalf("status during the run = %+v, want an ID and kind %q", st, store.KindTest)
+	}
+	if st.ID != store.IDFor(st.StartedAt) {
+		t.Errorf("ID %q is not derived from StartedAt %v", st.ID, st.StartedAt)
+	}
+	live := app.Logs.Snapshot(logring.Query{Run: st.ID})
+	var sawCollecting bool
+	for _, rec := range live.Records {
+		sawCollecting = sawCollecting || rec.Msg == "collecting"
+	}
+	if !sawCollecting {
+		t.Errorf("no log line tagged with the running run's ID yet: %+v", live.Records)
+	}
+
+	close(src.release)
+	waitIdle(t, g)
+	entries := app.Store.List()
+	if len(entries) != 1 || entries[0].ID != st.ID {
+		t.Fatalf("history = %+v, want the finished report stored under the announced ID %q", entries, st.ID)
+	}
+	if entries[0].Kind != store.KindTest {
+		t.Errorf("stored kind = %q, want %q", entries[0].Kind, store.KindTest)
+	}
+}
+
+// Schedule, button, dry button: each lands in the history under its own kind,
+// and every log line of every run carries that run's ID and kind.
+func TestRunGateKindsAndTaggedLogs(t *testing.T) {
+	src := &gateSource{release: make(chan struct{})}
+	close(src.release)
+	app := gateApp(t, src, &gateSink{}, &gateLLM{})
+	g := newRunGate(app)
+
+	g.scheduled()
+	if err := g.Start(false); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, g)
+	if err := g.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, g)
+
+	entries := app.Store.List() // newest first
+	if len(entries) != 3 {
+		t.Fatalf("history has %d runs, want 3", len(entries))
+	}
+	wantKinds := []store.Kind{store.KindTest, store.KindManual, store.KindSchedule}
+	for i, e := range entries {
+		if e.Kind != wantKinds[i] {
+			t.Errorf("entry %d (%s) kind = %q, want %q", i, e.Report.Title, e.Kind, wantKinds[i])
+		}
+	}
+
+	ids := map[string]store.Kind{}
+	for _, e := range entries {
+		ids[e.ID] = e.Kind
+	}
+	perRun := map[string]int{}
+	for _, rec := range app.Logs.Snapshot(logring.Query{Limit: logring.MaxLimit}).Records {
+		if rec.Run == "" {
+			t.Errorf("a line of a run carries no run ID: %q %v", rec.Msg, rec.Attrs)
+			continue
+		}
+		kind, known := ids[rec.Run]
+		if !known {
+			t.Errorf("line %q is tagged with run %q, which is not in the history", rec.Msg, rec.Run)
+			continue
+		}
+		if rec.Attrs["kind"] != string(kind) {
+			t.Errorf("line %q of a %s run carries kind %q", rec.Msg, kind, rec.Attrs["kind"])
+		}
+		perRun[rec.Run]++
+	}
+	for id := range ids {
+		if perRun[id] < 5 {
+			t.Errorf("run %s produced only %d log lines, want the debug steps and the finish line", id, perRun[id])
+		}
 	}
 }
