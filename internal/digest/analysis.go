@@ -85,6 +85,9 @@ func ParseAnalysis(text string) (Analysis, error) {
 	return a, nil
 }
 
+// labels hold French words that misspell reads as English typos.
+//
+//nolint:misspell
 var labels = map[string]map[string]string{
 	"fr": {
 		"events": "événements", "ports": "ports", "urls": "URLs", "apps": "apps", "jails": "jails", "status": "HTTP",
