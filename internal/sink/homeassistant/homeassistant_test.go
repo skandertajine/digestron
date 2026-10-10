@@ -318,3 +318,40 @@ func TestSendWithoutLinkStillSetsTheDeliveryLevel(t *testing.T) {
 		t.Errorf("data = %v, want a passive, replaceable info", data)
 	}
 }
+
+// Two instances on one phone keep apart: each has its own thread, and an
+// all-clear from one never replaces the other's. Unset, the group is
+// "digestron".
+func TestSendGroupSeparatesInstances(t *testing.T) {
+	cases := []struct {
+		settings  map[string]any
+		group     string
+		infoTag   string
+		verdict   digest.Severity
+		wantNoTag bool
+	}{
+		{map[string]any{"group": "digestron-dev"}, "digestron-dev", "digestron-dev-info", digest.SeverityInfo, false},
+		{map[string]any{"group": "digestron-prod"}, "digestron-prod", "digestron-prod-info", digest.SeverityInfo, false},
+		{map[string]any{"group": "digestron-dev"}, "digestron-dev", "", digest.SeverityWarning, true},
+		{map[string]any{"group": ""}, "digestron", "digestron-info", digest.SeverityInfo, false},
+		{nil, "digestron", "digestron-info", digest.SeverityInfo, false},
+	}
+	for _, tc := range cases {
+		srv, got := capture(t)
+		if err := newSink(t, srv.URL, tc.settings).Send(context.Background(),
+			digest.Report{Title: "digest", Verdict: tc.verdict}); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := got()["data"].(map[string]any)
+		if data["group"] != tc.group {
+			t.Errorf("%v: data.group = %v, want %s", tc.settings, data["group"], tc.group)
+		}
+		tag, hasTag := data["tag"]
+		switch {
+		case tc.wantNoTag && hasTag:
+			t.Errorf("%v %s: data.tag = %v, want none", tc.settings, tc.verdict, tag)
+		case !tc.wantNoTag && tag != tc.infoTag:
+			t.Errorf("%v: data.tag = %v, want %s", tc.settings, tag, tc.infoTag)
+		}
+	}
+}

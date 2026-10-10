@@ -44,6 +44,11 @@ type Config struct {
 	// MaxChars caps the message; 0 = no cap. Push notifications show a few
 	// hundred characters at most, the full analysis lives behind Link.
 	MaxChars int `koanf:"max_chars"`
+	// Group is the notification thread on the phone (data.group), and the
+	// quiet hours of this instance replace each other under "<group>-info".
+	// Give each instance its own (digestron-dev, digestron-prod): with a
+	// shared one, an all-clear from one would silently replace the other's.
+	Group string `koanf:"group"`
 }
 
 type Sink struct {
@@ -53,12 +58,15 @@ type Sink struct {
 }
 
 func New(name string, settings map[string]any) (digest.Sink, error) {
-	var cfg Config
+	cfg := Config{Group: defaultGroup}
 	if err := config.DecodeSettings(settings, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.URL == "" || cfg.Token == "" || cfg.Service == "" {
 		return nil, fmt.Errorf("url, token and service are required")
+	}
+	if cfg.Group == "" {
+		cfg.Group = defaultGroup
 	}
 	s := &Sink{name: name, cfg: cfg}
 	if cfg.Template != "" {
@@ -117,7 +125,7 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 	if problems != "" {
 		verdict += "\u00b7PARTIAL"
 	}
-	data := pushData(r.Verdict, problems != "")
+	data := pushData(s.cfg.Group, r.Verdict, problems != "")
 	if link != "" {
 		data["url"] = link         // iOS
 		data["clickAction"] = link // Android
@@ -153,20 +161,17 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 	return nil
 }
 
-// Every digest goes to one thread on the phone; quiet hours share one slot
-// in it.
-const (
-	pushGroup = "digestron"
-	infoTag   = "digestron-info"
-)
+// defaultGroup is the thread every digest of an instance goes to when the
+// config does not name one; its quiet hours share one slot in it.
+const defaultGroup = "digestron"
 
 // pushData sets how the notification is delivered, in the companion app's
 // keys: data.group (the iOS thread), data.tag (a later notification with the
 // same tag replaces this one) and data.push.interruption-level.
 //
-//   - INFO: passive (no sound, no screen wake) under a fixed tag, so the
-//     hourly all-clear stops ringing and stops piling up: the lock screen
-//     holds the latest one.
+//   - INFO: passive (no sound, no screen wake) under the tag "<group>-info",
+//     so the hourly all-clear stops ringing and stops piling up: the lock
+//     screen holds the latest one.
 //   - WARNING: active, and no tag: each one stays until it is read.
 //   - CRITICAL: time-sensitive, which gets through a Focus.
 //
@@ -174,15 +179,15 @@ const (
 // is computed from the findings that survived: it is delivered as active and
 // kept, or a silent [INFO·PARTIAL] would replace the last all-clear without
 // a sound while the digest is half blind.
-func pushData(verdict digest.Severity, incomplete bool) map[string]any {
-	data := map[string]any{"group": pushGroup}
+func pushData(group string, verdict digest.Severity, incomplete bool) map[string]any {
+	data := map[string]any{"group": group}
 	level := "active"
 	switch {
 	case verdict == digest.SeverityCritical:
 		level = "time-sensitive"
 	case verdict == digest.SeverityInfo && !incomplete:
 		level = "passive"
-		data["tag"] = infoTag
+		data["tag"] = group + "-info"
 	}
 	data["push"] = map[string]any{"interruption-level": level}
 	return data
