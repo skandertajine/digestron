@@ -9,6 +9,13 @@ metadata:
   name: digestron
 spec:
   replicas: 1
+  # The history volume is ReadWriteOnce and two schedulers must never run the
+  # same hour: stop the old pod before starting the new one. The explicit null
+  # drops the rollingUpdate block the API server defaulted, which a
+  # client-side apply (ArgoCD) would otherwise keep and get rejected for.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app: digestron
@@ -19,6 +26,10 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
     spec:
+      securityContext:
+        # The image runs as 65532 (distroless nonroot); local-path creates the
+        # volume 0777, fsGroup covers provisioners that do not.
+        fsGroup: 65532
       containers:
         - name: digestron
           image: ghcr.io/skandertajine/digestron:dev-c85d65d
@@ -59,7 +70,8 @@ spec:
           configMap:
             name: digestron-config
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: digestron-data
 ---
 apiVersion: v1
 kind: Service

@@ -10,14 +10,24 @@ data:
       language: fr
       # top IP investiguees (facettes ES + rDNS/RDAP) et analysees par le LLM
       top_actors: 5
+      # Faits que le LLM ne peut pas deviner : sans eux il attribue le port
+      # 5000 a Home Assistant et propose de bloquer le noeud Scaleway.
       context: >
-        Homelab k3s deux noeuds expose sur Internet via un edge nginx sur un
-        Raspberry Pi : Home Assistant, Immich, Vaultwarden, ArgoCD, Grafana.
-        fail2ban protege l'edge, UFW le serveur principal.
+        Homelab k3s a trois noeuds ; ces trois noeuds et les flux entre eux
+        sont legitimes. 192.168.0.252 (skander-b850m) : control-plane en
+        Wi-Fi, protege par UFW ; Home Assistant (port 8123) et Frigate, les
+        cameras (port 5000), y tournent en hostNetwork et sont scrapes par
+        Prometheus. 192.168.0.213 (raspberrypi) : edge nginx public, protege
+        par fail2ban. 192.168.6.2 (em-gallant-kapitsa) : noeud Scaleway relie
+        par tunnel VPN, qui porte Elasticsearch, Prometheus et digestron.
+        Appareils du LAN : 192.168.0.27 = ampli Denon, 192.168.0.52 = pont
+        Philips Hue ; leurs reponses SSDP/UPnP (port source 1900) bloquees par
+        UFW sont benignes. Services exposes sur Internet via l'edge : Home
+        Assistant, Immich, Vaultwarden, ArgoCD, Grafana.
 
     schedule:
       cron: "5 * * * *"
-      timezone: "Europe/Paris"
+      timezone: "Europe/London"
 
     metrics:
       listen: ":9090"
@@ -34,12 +44,37 @@ data:
           index: "filebeat-*"
           username: elastic
           password: ${ES_PASSWORD}
+          # Un severity remplace les deux seuils du preset : toujours donner
+          # warning ET critical.
           queries:
+            # Un ban est une defense reussie : avertir sur une vague, pas sur
+            # un ban isole. Provisoire, a recaler sur 7 jours une fois les logs
+            # du Pi revenus dans ES.
             - preset: fail2ban
+              severity: { warning: 10, critical: 50 }
             - preset: ssh_auth
             - preset: app_login_failures
+            # Rejeu horaire du preset (fenetres :05-:05). 7 jours au 10/10 :
+            # mediane 637, p99 885, max 916, donc 0 warning. 60 jours : max
+            # 1046 hors incident, 1809 le 14/08 (reseau du nouveau noeud),
+            # donc 0 critical. Depuis la regle UFW 192.168.6.2 -> :5000
+            # (10/10), environ 430/h.
             - preset: ufw_blocks
+              severity: { warning: 1300, critical: 2000 }
             - preset: nginx_public
+
+      # Cibles Prometheus en panne au moins 10 minutes dans l'heure (scrape a
+      # 15 s). Le seuil de 10 minutes ecarte les trous de 1 a 6 minutes que
+      # laisse un rollout ; group compte un point par cible, meme si plusieurs
+      # pods la partagent (les 3 traefik sur 192.168.0.252:8080).
+      - name: prom
+        type: prometheus
+        settings:
+          url: http://prometheus.prometheus.svc.cluster.local:9090
+          queries:
+            - name: "cibles supervisées en panne dans l'heure"
+              query: "group by (job, namespace, instance) (count_over_time((up == 0)[1h:1m]) >= 10)"
+              severity: { warning: 1, critical: 10 }
 
     llm:
       type: ollama
