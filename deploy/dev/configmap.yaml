@@ -101,3 +101,6 @@ data:
           # notif courte (titre + une ligne par IP), le tap ouvre le rapport complet
           link: http://digestron-dev.home/
           max_chars: 450
+          # fil de notifs propre a dev : un INFO dev (tag digestron-dev-info)
+          # ne remplace jamais celui de la prod
+          group: digestron-dev
