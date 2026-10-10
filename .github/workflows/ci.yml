@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, dev]
   pull_request: {}
+  # deploy-dev.yml and release.yml call this workflow and wait for it: an
+  # image only ships from a commit that passed test, lint and vuln.
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -30,7 +33,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           # Pinned, like govulncheck below: a new release must not turn a
-          # commit red on its own.
+          # commit red on its own now that deploys wait for this workflow.
           version: v2.14.0
 
   vuln:

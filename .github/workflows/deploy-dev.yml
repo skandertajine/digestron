@@ -10,13 +10,28 @@ permissions:
   contents: write
   packages: write
 
+# One deploy at a time. A newer push cancels the run it supersedes, so the
+# manifest always ends on the newest commit instead of on whichever build
+# finished last.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
+
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   image:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
+      # The commit ci just passed, which is also the one the tag names. dev
+      # may already point further.
       - uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.sha }}
 
       - id: tag
         run: echo "sha=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
@@ -40,10 +55,22 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.sha }}
 
       - name: bump dev manifest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.sha }}
         run: |
-          sed -i "s|ghcr.io/${{ github.repository }}:dev.*|ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.sha }}|" deploy/dev/deployment.yaml
+          # Commit the bump on top of the current dev tip: a [skip ci] commit
+          # may have landed since this run started, and pushing from the
+          # built commit would then be rejected.
+          git fetch --depth=1 origin dev
+          git checkout -q --detach FETCH_HEAD
+          sed -i "s|${IMAGE}:dev.*|${IMAGE}:${TAG}|" deploy/dev/deployment.yaml
+          if git diff --quiet; then
+            echo "deploy/dev/deployment.yaml already on ${TAG}"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add deploy/dev/deployment.yaml
-          git commit -m "deploy: ${{ steps.tag.outputs.sha }} [skip ci]"
+          git commit -m "deploy: ${TAG} [skip ci]"
           git push origin HEAD:dev
