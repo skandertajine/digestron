@@ -12,11 +12,18 @@ import (
 // and timestamp in the final report comes from Go (RenderAnalysis); a small
 // local model writing free text invents ports, repeats IPs and loops until
 // its token budget runs out.
+//
+// There is deliberately no field for what to do. Free-text actions told the
+// operator to block the k3s node that runs the monitoring, and then the
+// whole home network: the model cannot know which addresses belong to the
+// infrastructure. The one-sentence "campaign" went with them: it is
+// free text too, its subject (a shared owner or /24) is the very thing that
+// turns into "ban the range", and every fact it would rest on (owner, prefix,
+// targets, timing) is already in the data for Go to group. A reply that still
+// carries either field is read without it.
 type Analysis struct {
 	Headline string          `json:"headline"`
 	Actors   []ActorAnalysis `json:"actors"`
-	Campaign string          `json:"campaign"`
-	Actions  []string        `json:"actions"`
 }
 
 type ActorAnalysis struct {
@@ -56,13 +63,13 @@ func AnalysisSchema(actors []Actor) json.RawMessage {
 						"threat":   map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}},
 						"success":  map[string]any{"type": "boolean"},
 					},
-					"required": []string{"ip", "activity", "pattern", "threat", "success"},
+					"required":             []string{"ip", "activity", "pattern", "threat", "success"},
+					"additionalProperties": false,
 				},
 			},
-			"campaign": map[string]any{"type": "string"},
-			"actions":  map[string]any{"type": "array", "maxItems": 3, "items": map[string]any{"type": "string"}},
 		},
-		"required": []string{"headline", "actors", "campaign", "actions"},
+		"required":             []string{"headline", "actors"},
+		"additionalProperties": false,
 	}
 	raw, _ := json.Marshal(schema)
 	return raw
@@ -92,7 +99,7 @@ var labels = map[string]map[string]string{
 	"fr": {
 		"events": "événements", "ports": "ports", "urls": "URLs", "apps": "apps", "jails": "jails", "status": "HTTP",
 		"pattern": "Pattern", "threat": "Menace", "success": "SIGNE DE SUCCÈS", "nosuccess": "aucun signe de succès",
-		"campaign": "Campagne", "actions": "Actions", "internal": "réseau local", "unknown": "propriétaire inconnu",
+		"internal": "réseau local", "unknown": "propriétaire inconnu",
 		"low": "faible", "medium": "moyenne", "high": "haute",
 		"port_scan": "scan de ports", "ssh_bruteforce": "brute force SSH", "web_login_bruteforce": "brute force login web",
 		"web_vuln_scan": "scan de vulnérabilités web", "bot_crawler": "bot/crawler", "internal_device": "appareil interne", "unclear": "indéterminé",
@@ -100,7 +107,7 @@ var labels = map[string]map[string]string{
 	"en": {
 		"events": "events", "ports": "ports", "urls": "URLs", "apps": "apps", "jails": "jails", "status": "HTTP",
 		"pattern": "Pattern", "threat": "Threat", "success": "SIGN OF SUCCESS", "nosuccess": "no sign of success",
-		"campaign": "Campaign", "actions": "Actions", "internal": "home network", "unknown": "unknown owner",
+		"internal": "home network", "unknown": "unknown owner",
 		"low": "low", "medium": "medium", "high": "high",
 		"port_scan": "port scan", "ssh_bruteforce": "SSH brute force", "web_login_bruteforce": "web login brute force",
 		"web_vuln_scan": "web vulnerability scan", "bot_crawler": "bot/crawler", "internal_device": "internal device", "unclear": "unclear",
@@ -108,9 +115,9 @@ var labels = map[string]map[string]string{
 }
 
 // RenderAnalysis merges the model's judgments with the facts Go collected
-// into the report text: headline, one block per actor in rank order, the
-// campaign note and the actions. Judgments about IPs that are not actors
-// are dropped; actors the model skipped still get their facts.
+// into the report text: headline, then one block per actor in rank order.
+// Judgments about IPs that are not actors are dropped; actors the model
+// skipped still get their facts.
 func RenderAnalysis(a Analysis, actors []Actor, language string) string {
 	l, ok := labels[language]
 	if !ok {
@@ -170,18 +177,6 @@ func RenderAnalysis(a Analysis, actors []Actor, language string) string {
 				success = tr("success")
 			}
 			fmt.Fprintf(&b, "   %s : %s · %s : %s · %s\n", tr("pattern"), tr(aa.Pattern), tr("threat"), tr(aa.Threat), success)
-		}
-	}
-	if c := strings.TrimSpace(a.Campaign); c != "" {
-		b.WriteString("\n" + tr("campaign") + " : " + c + "\n")
-	}
-	if len(a.Actions) > 0 {
-		b.WriteString("\n" + tr("actions") + " :\n")
-		for i, act := range a.Actions {
-			if i == 3 {
-				break
-			}
-			b.WriteString("- " + strings.TrimSpace(act) + "\n")
 		}
 	}
 	return strings.TrimSpace(b.String())

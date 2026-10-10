@@ -24,7 +24,7 @@ func TestRankActorsSumsAcrossFindingsAndSkipsNonIPs(t *testing.T) {
 }
 
 func TestParseAnalysisToleratesFences(t *testing.T) {
-	a, err := ParseAnalysis("```json\n{\"headline\":\"h\",\"actors\":[],\"campaign\":\"\",\"actions\":[]}\n```")
+	a, err := ParseAnalysis("```json\n{\"headline\":\"h\",\"actors\":[]}\n```")
 	if err != nil || a.Headline != "h" {
 		t.Fatalf("a=%+v err=%v", a, err)
 	}
@@ -46,17 +46,57 @@ func TestRenderAnalysisFactsFromGoJudgmentsFromModel(t *testing.T) {
 			{IP: "203.0.113.7", Activity: "Tried root.", Pattern: "ssh_bruteforce", Threat: "medium"},
 			{IP: "10.9.9.9", Activity: "invented", Pattern: "unclear", Threat: "high"},
 		},
-		Actions: []string{"a", "b", "c", "d"},
 	}, actors, "fr")
 
 	for _, want := range []string{"Brute force SSH.", "1. 203.0.113.7 | Example Net, NL | 12 événements, 07:00→07:30 UTC",
-		"ports 22(12)", "Tried root.", "brute force SSH", "Menace : moyenne", "2. 192.168.0.5 | réseau local", "- c"} {
+		"ports 22(12)", "Tried root.", "brute force SSH", "Menace : moyenne", "2. 192.168.0.5 | réseau local"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "invented") || strings.Contains(out, "- d") {
-		t.Errorf("judgment on a non-actor or a fourth action leaked:\n%s", out)
+	if strings.Contains(out, "invented") {
+		t.Errorf("judgment on a non-actor leaked:\n%s", out)
+	}
+}
+
+// T221: the model is asked for no action and no campaign, and when it writes
+// them anyway (a provider that does not enforce the schema, an old prompt)
+// they never reach the report.
+func TestAnalysisCarriesNoFreeTextActions(t *testing.T) {
+	schema := string(AnalysisSchema([]Actor{{IP: "203.0.113.7"}}))
+	for _, field := range []string{`"actions"`, `"campaign"`} {
+		if strings.Contains(schema, field) {
+			t.Errorf("schema still asks for %s: %s", field, schema)
+		}
+	}
+	if !strings.Contains(schema, `"additionalProperties":false`) {
+		t.Errorf("schema must close the object to fields it does not name: %s", schema)
+	}
+
+	req, err := BuildRequest(sampleReport(), "fr", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"actions:", "campaign:"} {
+		if strings.Contains(req.System, step) {
+			t.Errorf("prompt still asks for %q", step)
+		}
+	}
+	if !strings.Contains(req.System, "never recommend") {
+		t.Error("prompt must forbid recommendations in the remaining text fields")
+	}
+
+	a, err := ParseAnalysis(`{"headline":"Scan bloqué.","actors":[{"ip":"203.0.113.7","activity":"Scan TCP.","pattern":"port_scan","threat":"low","success":false}],
+		"campaign":"Campagne coordonnée depuis 203.0.113.0/24, à bannir.",
+		"actions":["Bloquer toutes les connexions entrantes depuis la plage locale"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := RenderAnalysis(a, []Actor{{IP: "203.0.113.7", Events: 3}}, "fr")
+	for _, leak := range []string{"Actions", "Bloquer", "Campagne", "bannir", "203.0.113.0/24"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q leaked into the report:\n%s", leak, out)
+		}
 	}
 }
 
