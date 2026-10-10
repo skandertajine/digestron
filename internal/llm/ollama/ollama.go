@@ -22,12 +22,25 @@ func init() {
 }
 
 type Config struct {
-	URL         string   `koanf:"url"`
-	Model       string   `koanf:"model"`
-	NumCtx      int      `koanf:"num_ctx"`
-	NumPredict  int      `koanf:"num_predict"`
-	KeepAlive   string   `koanf:"keep_alive"`
-	Temperature *float64 `koanf:"temperature"`
+	URL        string `koanf:"url"`
+	Model      string `koanf:"model"`
+	NumCtx     int    `koanf:"num_ctx"`
+	NumPredict int    `koanf:"num_predict"`
+	KeepAlive  string `koanf:"keep_alive"`
+
+	// Sampling options. Unset leaves the model's Modelfile value, often
+	// tuned for chat rather than for a factual report (a high temperature, a
+	// presence_penalty that pushes the model away from words it already
+	// used); set, the value is sent even when it is 0, which is how
+	// presence_penalty is switched off.
+	Temperature     *float64 `koanf:"temperature"`
+	TopP            *float64 `koanf:"top_p"`
+	PresencePenalty *float64 `koanf:"presence_penalty"`
+	// Seed fixes the sampler: the same request gets the same reply, so a
+	// replayed prompt is compared on what it says, not on the dice. (Each
+	// run's prompt still differs by its random fence token.)
+	Seed *int `koanf:"seed"`
+
 	// Think stays off unless asked for: on a reasoning model the trace eats
 	// num_predict before a single character of the digest is written.
 	Think bool `koanf:"think"`
@@ -44,7 +57,9 @@ func New(settings map[string]any) (digest.LLM, error) {
 		NumPredict: 2048, // the per-IP analysis runs to a few hundred words
 		KeepAlive:  "10m",
 	}
-	if err := config.DecodeSettings(settings, &cfg); err != nil {
+	// Strict: a misspelt sampling key would otherwise leave the Modelfile
+	// default in place without a word.
+	if err := config.DecodeSettingsStrict(settings, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Model == "" {
@@ -87,6 +102,15 @@ func (c *Client) Complete(ctx context.Context, req digest.Request) (digest.Respo
 	}
 	if c.cfg.Temperature != nil {
 		options["temperature"] = *c.cfg.Temperature
+	}
+	if c.cfg.TopP != nil {
+		options["top_p"] = *c.cfg.TopP
+	}
+	if c.cfg.PresencePenalty != nil {
+		options["presence_penalty"] = *c.cfg.PresencePenalty
+	}
+	if c.cfg.Seed != nil {
+		options["seed"] = *c.cfg.Seed
 	}
 	body, err := json.Marshal(chatRequest{
 		Model: c.cfg.Model,

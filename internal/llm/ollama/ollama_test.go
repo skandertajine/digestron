@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/skandertajine/digestron/internal/digest"
@@ -142,5 +143,71 @@ func TestThinkIsOverridable(t *testing.T) {
 	}
 	if got["think"] != true {
 		t.Errorf("think = %v, want true when the operator asks for it", got["think"])
+	}
+}
+
+// The Modelfile's chat defaults (temperature 1, presence_penalty 1.5) are
+// what the operator overrides here; an explicit 0 must reach the server, or
+// presence_penalty can never be switched off.
+func TestSamplingOptionsAreSentWhenSet(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"},"done_reason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(map[string]any{"url": srv.URL, "model": "qwen3:8b",
+		"temperature": 0.2, "top_p": 0.8, "presence_penalty": 0, "seed": 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Complete(context.Background(), digest.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := got["options"].(map[string]any)
+	want := map[string]any{"temperature": 0.2, "top_p": 0.8, "presence_penalty": float64(0), "seed": float64(42)}
+	for k, v := range want {
+		if opts[k] != v {
+			t.Errorf("options.%s = %v, want %v", k, opts[k], v)
+		}
+	}
+}
+
+func TestSamplingOptionsLeftToTheModelfileWhenUnset(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"},"done_reason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	if _, err := newClient(t, srv.URL).Complete(context.Background(), digest.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := got["options"].(map[string]any)
+	for _, k := range []string{"temperature", "top_p", "presence_penalty", "seed"} {
+		if v, ok := opts[k]; ok {
+			t.Errorf("options.%s = %v sent although not configured", k, v)
+		}
+	}
+}
+
+// A misspelt key used to be dropped without a word, leaving the model on its
+// Modelfile default while the config claimed otherwise.
+func TestNewRejectsUnknownSettings(t *testing.T) {
+	_, err := New(map[string]any{"url": "http://x", "model": "qwen3:8b", "presence_penalt": 0})
+	if err == nil || !strings.Contains(err.Error(), "presence_penalt") {
+		t.Errorf("err = %v, want the unknown key named", err)
 	}
 }
