@@ -1,0 +1,21 @@
+# Run history of the dev instance (history.path in configmap.yaml). On an
+# emptyDir every rollout wiped it and the #run= links of past notifications
+# opened an empty page.
+#
+# local-path binds the volume on the node where the pod first lands
+# (WaitForFirstConsumer); the pod then stays pinned to that node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: digestron-data
+  annotations:
+    # ArgoCD prunes what leaves git and local-path deletes the data with the
+    # claim: dropping the history stays a manual decision.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
