@@ -34,11 +34,23 @@ data:
           index: "filebeat-*"
           username: elastic
           password: ${ES_PASSWORD}
+          # Un severity remplace les deux seuils du preset : toujours donner
+          # warning ET critical.
           queries:
+            # Un ban est une defense reussie : avertir sur une vague, pas sur
+            # un ban isole. Provisoire, a recaler sur 7 jours une fois les logs
+            # du Pi revenus dans ES.
             - preset: fail2ban
+              severity: { warning: 10, critical: 50 }
             - preset: ssh_auth
             - preset: app_login_failures
+            # Rejeu horaire du preset (fenetres :05-:05). 7 jours au 10/10 :
+            # mediane 637, p99 885, max 916, donc 0 warning. 60 jours : max
+            # 1046 hors incident, 1809 le 14/08 (reseau du nouveau noeud),
+            # donc 0 critical. Depuis la regle UFW 192.168.6.2 -> :5000
+            # (10/10), environ 430/h.
             - preset: ufw_blocks
+              severity: { warning: 1300, critical: 2000 }
             - preset: nginx_public
 
     llm:
