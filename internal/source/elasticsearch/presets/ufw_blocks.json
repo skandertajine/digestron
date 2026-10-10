@@ -10,7 +10,14 @@
       "must_not": [
         {"terms": {"destination.ip.keyword": ["255.255.255.255"]}},
         {"regexp": {"destination.ip.keyword": "(22[4-9]|23[0-9])[.].*"}},
-        {"prefix": {"destination.ip.keyword": "ff02:"}}
+        {"prefix": {"destination.ip.keyword": "ff02:"}},
+        {"bool": {"filter": [
+          {"term": {"client.port": 1900}},
+          {"bool": {"should": [
+            {"prefix": {"client.ip.keyword": "192.168."}},
+            {"prefix": {"client.ip.keyword": "10."}}
+          ], "minimum_should_match": 1}}
+        ]}}
       ]
     }
   },
