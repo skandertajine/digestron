@@ -41,7 +41,7 @@ func New(settings map[string]any) (digest.LLM, error) {
 	cfg := Config{
 		URL:        "http://localhost:11434",
 		NumCtx:     8192,
-		NumPredict: 512,
+		NumPredict: 2048, // the per-IP analysis runs to a few hundred words
 		KeepAlive:  "10m",
 	}
 	if err := config.DecodeSettings(settings, &cfg); err != nil {
@@ -56,12 +56,13 @@ func New(settings map[string]any) (digest.LLM, error) {
 func (c *Client) Name() string { return "ollama" }
 
 type chatRequest struct {
-	Model     string         `json:"model"`
-	Messages  []chatMessage  `json:"messages"`
-	Stream    bool           `json:"stream"`
-	Think     bool           `json:"think"`
-	KeepAlive string         `json:"keep_alive,omitempty"`
-	Options   map[string]any `json:"options"`
+	Model     string          `json:"model"`
+	Messages  []chatMessage   `json:"messages"`
+	Stream    bool            `json:"stream"`
+	Think     bool            `json:"think"`
+	KeepAlive string          `json:"keep_alive,omitempty"`
+	Options   map[string]any  `json:"options"`
+	Format    json.RawMessage `json:"format,omitempty"`
 }
 
 type chatMessage struct {
@@ -97,6 +98,7 @@ func (c *Client) Complete(ctx context.Context, req digest.Request) (digest.Respo
 		Think:     c.cfg.Think,
 		KeepAlive: c.cfg.KeepAlive,
 		Options:   options,
+		Format:    req.Schema,
 	})
 	if err != nil {
 		return digest.Response{}, err

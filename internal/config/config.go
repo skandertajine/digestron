@@ -38,6 +38,15 @@ type DigestConfig struct {
 	Window   time.Duration `koanf:"window"`   // time range each run covers
 	Language string        `koanf:"language"` // language of the LLM summary
 	Context  string        `koanf:"context"`  // free text appended to the system prompt
+
+	// TopActors is how many of the most active IPs are investigated in
+	// detail and handed to the LLM; 0 disables the investigation.
+	TopActors          int           `koanf:"top_actors"`
+	InvestigateTimeout time.Duration `koanf:"investigate_timeout"`
+	// Whois identifies public actors (reverse DNS + RDAP registry owner).
+	// The IPs leave the cluster towards rdap.org; set false to keep them in.
+	Whois   bool   `koanf:"whois"`
+	RDAPURL string `koanf:"rdap_url"`
 }
 
 type ScheduleConfig struct {
@@ -74,11 +83,14 @@ type LLMConfig struct {
 
 func Defaults() *Config {
 	return &Config{
-		Log:     LogConfig{Level: "info"},
-		Digest:  DigestConfig{Title: "Security digest", Window: time.Hour, Language: "en"},
+		Log: LogConfig{Level: "info"},
+		Digest: DigestConfig{
+			Title: "Security digest", Window: time.Hour, Language: "en",
+			TopActors: 5, InvestigateTimeout: 30 * time.Second, Whois: true,
+		},
 		Metrics: MetricsConfig{Listen: ":9090"},
 		History: HistoryConfig{Keep: 200},
-		LLM:     LLMConfig{Type: "noop", Timeout: 120 * time.Second, Retries: 2, MaxChars: 1500},
+		LLM:     LLMConfig{Type: "noop", Timeout: 120 * time.Second, Retries: 2, MaxChars: 8000},
 	}
 }
 

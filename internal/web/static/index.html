@@ -115,6 +115,17 @@
     margin-bottom: 1.4rem;
   }
 
+  .actors { margin-bottom: 1.4rem; display: flex; flex-direction: column; gap: .5rem; }
+  details.actor { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem .8rem; background: rgba(255,255,255,.02); }
+  details.actor summary { cursor: pointer; font-size: .85rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
+  details.actor .who { color: var(--muted); font-size: .8rem; }
+  details.actor .ev { color: var(--muted-2); font-family: var(--mono); font-size: .72rem; margin-left: auto; }
+  details.actor > .chips, .facet { margin-top: .5rem; }
+  .facet { display: flex; gap: .5rem; align-items: baseline; }
+  .facet .k { font-family: var(--mono); font-size: .7rem; color: var(--muted-2); min-width: 7.5rem; }
+  .samples { margin-top: .6rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
+  .sample { font-family: var(--mono); font-size: .7rem; color: var(--muted); white-space: pre-wrap; word-break: break-all; padding: .1rem 0; }
+
   h3.section { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 .6rem; font-weight: 600; }
 
   table.findings { border-collapse: collapse; width: 100%; margin-bottom: 1.4rem; }
@@ -360,7 +371,32 @@ async function refresh() {
     el.addEventListener("click", ev => { ev.stopPropagation(); setLogRun(el.dataset.run, true); }));
 }
 
+// actorsBlock lists the top IPs the run investigated, with what Go found on
+// each: who owns it, when it was active, what it hit, and raw sample lines.
+function actorsBlock(actors) {
+  if (!actors || !actors.length) return "";
+  const top = m => Object.entries(m || {}).sort((a, b) => b[1] - a[1]).slice(0, 6)
+    .map(([k, v]) => `<span class="chip">${esc(k)}=${v}</span>`).join("");
+  const hhmm = d => d && !d.startsWith("0001") ? new Date(d).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "?";
+  const rows = actors.map((a, i) => {
+    const who = [a.network, a.country, a.hostname].filter(Boolean).map(esc).join(" · ") || (a.internal ? "réseau local" : "inconnu");
+    const facets = Object.entries(a.facets || {}).map(([k, m]) =>
+      `<div class="facet"><span class="k">${esc(k)}</span><div class="chips">${top(m)}</div></div>`).join("");
+    const samples = (a.samples || []).map(l => `<div class="sample">${esc(l)}</div>`).join("");
+    return `
+      <details class="actor" ${i === 0 ? "open" : ""}>
+        <summary><b class="mono">${i + 1}. ${esc(a.ip)}</b> <span class="who">${who}</span>
+          <span class="ev">${a.events} events · ${hhmm(a.first_seen)} → ${hhmm(a.last_seen)}</span></summary>
+        <div class="chips">${top(a.findings)}</div>
+        ${facets}
+        ${samples ? `<div class="samples">${samples}</div>` : ""}
+      </details>`;
+  }).join("");
+  return `<h3 class="section">top IPs investigated</h3><div class="actors">${rows}</div>`;
+}
+
 async function show(id) {
+  if (location.hash !== "#run=" + id) history.replaceState(null, "", "#run=" + id);
   selected = id;
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
     el.classList.toggle("selected", el.dataset.id === id));
@@ -412,6 +448,8 @@ async function show(id) {
       ${pill(r.verdict)}
     </div>
     <div class="summary-box">${esc(r.summary || "(no LLM summary — raw digest was delivered)")}</div>
+
+    ${actorsBlock(r.actors)}
 
     <h3 class="section">findings received</h3>
     <table class="findings">
@@ -798,7 +836,11 @@ setInterval(pollStatus, 5000);
 resetLogs();
 const logTimer = setInterval(pollLogs, 2000);
 
-refresh();
+refresh().then(() => {
+  // A notification links here as #run=<id>: open that run directly.
+  const m = location.hash.match(/^#run=(.+)$/);
+  if (m) show(decodeURIComponent(m[1]));
+});
 watchRun(); // the page may open while the hourly run is in flight
 setInterval(refresh, 30000);
 </script>

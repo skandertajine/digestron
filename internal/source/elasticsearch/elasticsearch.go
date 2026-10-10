@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"text/template"
 	"time"
 
@@ -257,4 +258,129 @@ type esResponse struct {
 			} `json:"buckets"`
 		} `json:"breakdown"`
 	} `json:"aggregations"`
+}
+
+// investigateFacets are the fields worth a top-N for one IP: together they
+// say what the address did (ports probed, URLs tried, jails hit) without
+// shipping raw logs. A field absent from the matching documents simply
+// yields no buckets.
+var investigateFacets = []struct{ name, field string }{
+	{"log_source", "source.keyword"},
+	{"app", "log.syslog.appname.keyword"},
+	{"fail2ban_jail", "fail2ban.jail.keyword"},
+	{"dst_port", "destination.port"},
+	{"protocol", "network.transport.keyword"},
+	{"http_method", "http.request.method.keyword"},
+	{"http_status", "http.response.status_code"},
+	{"url", "url.original.keyword"},
+	{"user_agent", "user_agent.original.keyword"},
+}
+
+const (
+	facetSize   = 8
+	sampleCount = 6
+	sampleChars = 220
+)
+
+// Investigate drills into one IP over the window: first and last activity,
+// a top-N per facet and a few distinct raw lines. One _search per IP.
+func (s *Source) Investigate(ctx context.Context, w digest.Window, a *digest.Actor) error {
+	aggs := map[string]any{
+		"first": map[string]any{"min": map[string]any{"field": "@timestamp"}},
+		"last":  map[string]any{"max": map[string]any{"field": "@timestamp"}},
+	}
+	for _, f := range investigateFacets {
+		aggs["facet_"+f.name] = map[string]any{"terms": map[string]any{"field": f.field, "size": facetSize}}
+	}
+	body, err := json.Marshal(map[string]any{
+		// The latest raw lines come as plain hits: a terms aggregation on
+		// message.keyword builds an ordinal map over every message of the
+		// index and trips the request circuit breaker on a small cluster.
+		"size":             sampleCount,
+		"_source":          []string{"message"},
+		"sort":             []any{map[string]any{"@timestamp": "desc"}},
+		"track_total_hits": false,
+		"query": map[string]any{"bool": map[string]any{"filter": []any{
+			map[string]any{"range": map[string]any{"@timestamp": map[string]any{
+				"gte": w.From.UTC().Format(time.RFC3339), "lte": w.To.UTC().Format(time.RFC3339)}}},
+			map[string]any{"term": map[string]any{"client.ip.keyword": a.IP}},
+		}}},
+		"aggs": aggs,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.url+"/"+s.index+"/_search", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.username != "" {
+		req.SetBasicAuth(s.username, s.password.Reveal())
+	}
+	resp, err := httpx.Do(req, 1)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("elasticsearch: %s: %s", resp.Status, msg)
+	}
+
+	var out struct {
+		Hits struct {
+			Hits []struct {
+				Source struct {
+					Message string `json:"message"`
+				} `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+		Aggregations map[string]struct {
+			ValueAsString string `json:"value_as_string"`
+			Buckets       []struct {
+				Key      any `json:"key"`
+				DocCount int `json:"doc_count"`
+			} `json:"buckets"`
+		} `json:"aggregations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return err
+	}
+
+	if t, err := time.Parse(time.RFC3339, out.Aggregations["first"].ValueAsString); err == nil {
+		a.FirstSeen = t
+	}
+	if t, err := time.Parse(time.RFC3339, out.Aggregations["last"].ValueAsString); err == nil {
+		a.LastSeen = t
+	}
+	for _, f := range investigateFacets {
+		buckets := out.Aggregations["facet_"+f.name].Buckets
+		if len(buckets) == 0 {
+			continue
+		}
+		if a.Facets == nil {
+			a.Facets = map[string]map[string]int{}
+		}
+		m := make(map[string]int, len(buckets))
+		for _, b := range buckets {
+			m[fmt.Sprint(b.Key)] = b.DocCount
+		}
+		a.Facets[f.name] = m
+	}
+	seen := map[string]bool{}
+	for _, h := range out.Hits.Hits {
+		line := strings.TrimSpace(h.Source.Message)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		if r := []rune(line); len(r) > sampleChars {
+			line = string(r[:sampleChars]) + "…"
+		}
+		a.Samples = append(a.Samples, line)
+	}
+	return nil
 }

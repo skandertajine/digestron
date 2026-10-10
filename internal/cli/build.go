@@ -15,6 +15,7 @@ import (
 	"github.com/skandertajine/digestron/internal/source"
 	"github.com/skandertajine/digestron/internal/store"
 	"github.com/skandertajine/digestron/internal/version"
+	"github.com/skandertajine/digestron/internal/whois"
 )
 
 const defaultModuleTimeout = 30 * time.Second
@@ -94,6 +95,12 @@ func Build(cfgPath string, noLLM bool) (*App, error) {
 		LLM:        runnerLLM,
 		Log:        log,
 		Scrub:      scrub.Scrub,
+
+		TopActors:          cfg.Digest.TopActors,
+		InvestigateTimeout: cfg.Digest.InvestigateTimeout,
+	}
+	if cfg.Digest.Whois {
+		app.Runner.Enrich = whois.New(cfg.Digest.RDAPURL).Enrich
 	}
 	return app, nil
 }

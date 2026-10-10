@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/skandertajine/digestron/internal/config"
 	"github.com/skandertajine/digestron/internal/digest"
@@ -31,6 +32,14 @@ type Config struct {
 	Token    config.Secret `koanf:"token"`
 	Service  string        `koanf:"service"`
 	Template string        `koanf:"template"`
+	// Link, when set, makes the notification a teaser of the full report:
+	// the headline and one line per top IP, then the link — and tapping the
+	// notification opens it (iOS url, Android clickAction). The run ID is
+	// appended as #run=<id> so the UI opens that run.
+	Link string `koanf:"link"`
+	// MaxChars caps the message; 0 = no cap. Push notifications show a few
+	// hundred characters at most, the full analysis lives behind Link.
+	MaxChars int `koanf:"max_chars"`
 }
 
 type Sink struct {
@@ -73,6 +82,22 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 		// the casualties verbatim instead of hoping the model mentions them.
 		message += "\n\n" + problems
 	}
+	link := ""
+	if s.cfg.Link != "" {
+		link = s.cfg.Link + "#run=" + r.GeneratedAt.UTC().Format(time.RFC3339Nano)
+		if r.Summary != "" {
+			message = Teaser(r.Summary)
+			if problems != "" {
+				message += "\n\n" + problems
+			}
+		}
+	}
+	if s.cfg.MaxChars > 0 {
+		message = digest.PostProcess(message, s.cfg.MaxChars)
+	}
+	if link != "" {
+		message += "\n" + link
+	}
 	if s.messageTpl != nil {
 		var buf strings.Builder
 		if err := s.messageTpl.Execute(&buf, r); err != nil {
@@ -88,10 +113,14 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 	if problems != "" {
 		verdict += "\u00b7PARTIAL"
 	}
-	payload, err := json.Marshal(map[string]string{
+	body := map[string]any{
 		"title":   fmt.Sprintf("[%s] %s", verdict, r.Title),
 		"message": message,
-	})
+	}
+	if link != "" {
+		body["data"] = map[string]any{"url": link, "clickAction": link}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
@@ -135,4 +164,20 @@ func (s *Sink) Check(ctx context.Context) error {
 		return fmt.Errorf("homeassistant: %s", resp.Status)
 	}
 	return nil
+}
+
+// Teaser keeps what fits a lock screen from the analyst's report: the
+// headline (first paragraph) and the first line of each numbered IP block.
+func Teaser(summary string) string {
+	paras := strings.SplitN(strings.TrimSpace(summary), "\n\n", 2)
+	out := []string{strings.TrimSpace(paras[0])}
+	if len(paras) == 2 {
+		for _, line := range strings.Split(paras[1], "\n") {
+			line = strings.TrimSpace(line)
+			if len(line) > 2 && line[0] >= '1' && line[0] <= '9' && line[1] == '.' {
+				out = append(out, line)
+			}
+		}
+	}
+	return strings.Join(out, "\n")
 }

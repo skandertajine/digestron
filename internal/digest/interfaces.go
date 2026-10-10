@@ -27,3 +27,14 @@ type LLM interface {
 type Checker interface {
 	Check(ctx context.Context) error
 }
+
+// Investigator is optionally implemented by sources that can drill into one
+// IP over the window: when it was active, what it targeted, sample lines.
+// The runner calls it on the top actors after collection. It fills what it
+// knows and leaves the rest; an error costs the detail, never the run.
+type Investigator interface {
+	Investigate(ctx context.Context, w Window, a *Actor) error
+}
+
+// Enricher identifies who an IP belongs to (reverse DNS, registry owner).
+type Enricher func(ctx context.Context, a *Actor)

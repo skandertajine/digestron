@@ -37,6 +37,13 @@ type Runner struct {
 	LLM        LLM
 	Log        *slog.Logger
 
+	// TopActors is how many of the most active IPs get investigated and
+	// handed to the LLM in detail; 0 disables the step.
+	TopActors          int
+	InvestigateTimeout time.Duration
+	// Enrich, when set, identifies each public actor (rDNS, registry owner).
+	Enrich Enricher
+
 	// Scrub, when set, runs over every error text and the LLM summary before
 	// it enters the report. An upstream that rejects a request often quotes it
 	// back, and the report goes to the sinks, to history.json and to the UI:
@@ -94,6 +101,8 @@ func (r *Runner) Run(ctx context.Context) Report {
 		report.Cancelled = true
 		return report
 	}
+
+	r.investigate(ctx, &report)
 
 	r.phase("summarizing")
 	r.summarize(ctx, &report)
@@ -190,7 +199,13 @@ func (r *Runner) summarize(ctx context.Context, report *Report) {
 		r.Log.Warn("llm failed, sending raw digest", "provider", r.LLM.Name(), "error", err)
 		return
 	}
-	report.Summary = r.scrub(PostProcess(resp.Text, r.MaxChars))
+	text := PostProcess(resp.Text, 0)
+	if a, err := ParseAnalysis(text); err == nil {
+		text = RenderAnalysis(a, report.Actors, r.Language)
+	} else {
+		r.Log.Warn("llm reply is not the expected JSON, keeping it as text", "error", err)
+	}
+	report.Summary = r.scrub(PostProcess(text, r.MaxChars))
 }
 
 func (r *Runner) deliver(ctx context.Context, report Report) []SinkStats {

@@ -222,3 +222,11 @@ func TestSendFallbackNamesFailedAndPartialApart(t *testing.T) {
 		t.Errorf("the fallback already renders the block; it must not be appended twice: %q", msg)
 	}
 }
+
+func TestTeaserKeepsHeadlineAndIPLines(t *testing.T) {
+	got := Teaser("Headline.\n\n1. 1.2.3.4 | Net | 5 events\n   did things\n   Pattern : x\n\n2. 5.6.7.8 | Other | 2 events\n\nActions :\n- ban")
+	want := "Headline.\n1. 1.2.3.4 | Net | 5 events\n2. 5.6.7.8 | Other | 2 events"
+	if got != want {
+		t.Errorf("Teaser =\n%q\nwant\n%q", got, want)
+	}
+}

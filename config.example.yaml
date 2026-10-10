@@ -14,6 +14,9 @@ digest:
   context: >
     Optional free text appended to the system prompt: a short description of
     your infrastructure helps the model write relevant summaries.
+  top_actors: 5 # most active IPs investigated in detail for the LLM; 0 disables
+  investigate_timeout: 30s
+  whois: true # reverse DNS + RDAP owner of public actors (queries rdap.org)
 
 schedule: # serve mode only; ignored by `digestron run`
   cron: "5 * * * *"
@@ -97,6 +100,8 @@ sinks:
       token: ${HA_TOKEN} # sent as a Bearer header, never in the URL
       service: mobile_app_iphone
       # template: "{{ .Verdict }} — {{ .Summary }}" # optional message override
+      # link: http://digestron.example/ # teaser notification, tap opens the full report
+      # max_chars: 450 # cap on the notification text
 
   - name: mail
     type: email

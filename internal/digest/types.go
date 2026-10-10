@@ -63,6 +63,27 @@ type Finding struct {
 	Details  map[string]int `json:"details,omitempty"` // breakdown, e.g. IP -> count
 }
 
+// Actor is one source IP among the most active of the window, with what it
+// did: the evidence the LLM needs to describe a behaviour rather than repeat
+// a count. Ranking and every field come from Go; the model only interprets.
+type Actor struct {
+	IP       string         `json:"ip"`
+	Internal bool           `json:"internal,omitempty"` // private, loopback or link-local
+	Events   int            `json:"events"`             // sum of its counts across findings
+	Findings map[string]int `json:"findings"`           // finding title -> count
+
+	// Filled by investigators (sources that can drill into one IP).
+	FirstSeen time.Time                 `json:"first_seen,omitempty"`
+	LastSeen  time.Time                 `json:"last_seen,omitempty"`
+	Facets    map[string]map[string]int `json:"facets,omitempty"`  // e.g. "dst_port" -> "22" -> 40
+	Samples   []string                  `json:"samples,omitempty"` // a few raw log lines, truncated
+
+	// Filled by the enricher: who the address belongs to.
+	Hostname string `json:"hostname,omitempty"` // reverse DNS
+	Network  string `json:"network,omitempty"`  // RDAP network name / owner
+	Country  string `json:"country,omitempty"`
+}
+
 // SourceStats records one module's outcome for rendering, the UI and metrics.
 type SourceStats struct {
 	Source   string        `json:"source"`
@@ -101,6 +122,7 @@ type Report struct {
 	Verdict     Severity      `json:"verdict"`
 	Summary     string        `json:"summary"` // LLM text; empty in degraded mode
 	Findings    []Finding     `json:"findings"`
+	Actors      []Actor       `json:"actors,omitempty"`
 	Stats       []SourceStats `json:"stats"`
 	LLM         LLMStats      `json:"llm"`
 	Sinks       []SinkStats   `json:"sinks,omitempty"`
@@ -119,6 +141,10 @@ type Report struct {
 type Request struct {
 	System string
 	User   string
+	// Schema, when set, is a JSON schema the reply must follow. Providers
+	// that support constrained output enforce it; the others get it only
+	// through the prompt, and the runner falls back to the raw text.
+	Schema json.RawMessage
 }
 
 // Response is the LLM output with its token cost.
