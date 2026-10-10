@@ -80,7 +80,7 @@ func TestRunHappyPath(t *testing.T) {
 			{Source: fakeSource{name: "a", findings: []Finding{{Source: "a", Title: "t1", Count: 9, Severity: SeverityCritical}}}},
 		},
 		Sinks: []RunSink{{Sink: sink}},
-		LLM:   fakeLLM{resp: Response{Text: "trouble brewing", Model: "m1", PromptTokens: 10, CompletionTokens: 5}},
+		LLM:   fakeLLM{resp: Response{Text: `{"headline":"trouble brewing","actors":[]}`, Model: "m1", PromptTokens: 10, CompletionTokens: 5}},
 		Log:   quietLogger(),
 	}
 
@@ -412,10 +412,10 @@ func TestRunScrubsErrorsAndSummaryBeforeTheyEnterTheReport(t *testing.T) {
 
 	chatty := &Runner{
 		Title: "t", Window: time.Hour, Log: quietLogger(), Scrub: scrub, LLMTimeout: time.Second,
-		LLM: fakeLLM{resp: Response{Text: "all quiet, token " + secret, Model: "m"}},
+		LLM: fakeLLM{resp: Response{Text: `{"headline":"all quiet, token ` + secret + `","actors":[]}`, Model: "m"}},
 	}
-	if got := chatty.Run(context.Background()).Summary; strings.Contains(got, secret) {
-		t.Errorf("the summary carries the secret: %q", got)
+	if got := chatty.Run(context.Background()).Summary; strings.Contains(got, secret) || !strings.Contains(got, "<redacted>") {
+		t.Errorf("summary = %q, want the secret replaced and the rest kept", got)
 	}
 }
 

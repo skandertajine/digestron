@@ -2,7 +2,9 @@ package digest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,7 +36,10 @@ type ActorAnalysis struct {
 	Success  bool   `json:"success"`
 }
 
-var patterns = []string{"port_scan", "ssh_bruteforce", "web_login_bruteforce", "web_vuln_scan", "bot_crawler", "internal_device", "unclear"}
+var (
+	patterns = []string{"port_scan", "ssh_bruteforce", "web_login_bruteforce", "web_vuln_scan", "bot_crawler", "internal_device", "unclear"}
+	threats  = []string{"low", "medium", "high"}
+)
 
 // AnalysisSchema constrains the reply (Ollama "format", JSON schema). The
 // actors array is pinned to the run's IPs, in number and in value: a small
@@ -60,7 +65,7 @@ func AnalysisSchema(actors []Actor) json.RawMessage {
 						"ip":       ipSchema,
 						"activity": map[string]any{"type": "string"},
 						"pattern":  map[string]any{"type": "string", "enum": patterns},
-						"threat":   map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}},
+						"threat":   map[string]any{"type": "string", "enum": threats},
 						"success":  map[string]any{"type": "boolean"},
 					},
 					"required":             []string{"ip", "activity", "pattern", "threat", "success"},
@@ -75,8 +80,12 @@ func AnalysisSchema(actors []Actor) json.RawMessage {
 	return raw
 }
 
+// ErrInvalidReply marks an LLM reply that is not the analysis asked for. The
+// runner records it in LLMStats.Err and publishes none of the reply.
+var ErrInvalidReply = errors.New("invalid_reply")
+
 // ParseAnalysis reads the model's JSON, tolerating code fences and text
-// around the object.
+// around the object. The text around it is dropped, never shown.
 func ParseAnalysis(text string) (Analysis, error) {
 	var a Analysis
 	i, j := strings.Index(text, "{"), strings.LastIndex(text, "}")
@@ -116,8 +125,10 @@ var labels = map[string]map[string]string{
 
 // RenderAnalysis merges the model's judgments with the facts Go collected
 // into the report text: headline, then one block per actor in rank order.
-// Judgments about IPs that are not actors are dropped; actors the model
-// skipped still get their facts.
+// Judgments about IPs that are not actors, or whose pattern or threat is not
+// one of the schema's values, are dropped: those two fields are printed as
+// labels, and a provider that does not enforce the schema could otherwise
+// put any sentence there. Actors without a judgment still get their facts.
 func RenderAnalysis(a Analysis, actors []Actor, language string) string {
 	l, ok := labels[language]
 	if !ok {
@@ -131,6 +142,9 @@ func RenderAnalysis(a Analysis, actors []Actor, language string) string {
 	}
 	byIP := map[string]ActorAnalysis{}
 	for _, aa := range a.Actors {
+		if !slices.Contains(patterns, aa.Pattern) || !slices.Contains(threats, aa.Threat) {
+			continue
+		}
 		if _, seen := byIP[aa.IP]; !seen {
 			byIP[aa.IP] = aa
 		}

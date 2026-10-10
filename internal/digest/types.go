@@ -125,7 +125,7 @@ type Report struct {
 	Title       string        `json:"title"`
 	Window      Window        `json:"window"`
 	Verdict     Severity      `json:"verdict"`
-	Summary     string        `json:"summary"` // LLM text; empty in degraded mode
+	Summary     string        `json:"summary"` // LLM analysis rendered by Go; empty in degraded mode
 	Findings    []Finding     `json:"findings"`
 	Actors      []Actor       `json:"actors,omitempty"`
 	Stats       []SourceStats `json:"stats"`
@@ -148,7 +148,8 @@ type Request struct {
 	User   string
 	// Schema, when set, is a JSON schema the reply must follow. Providers
 	// that support constrained output enforce it; the others get it only
-	// through the prompt, and the runner falls back to the raw text.
+	// through the prompt, and a reply that does not parse is not published
+	// (the digest goes out with its counters only).
 	Schema json.RawMessage
 }
 

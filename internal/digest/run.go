@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -203,12 +204,22 @@ func (r *Runner) summarize(ctx context.Context, report *Report) {
 		return
 	}
 	text := PostProcess(resp.Text, 0)
-	if a, err := ParseAnalysis(text); err == nil {
-		text = RenderAnalysis(a, report.Actors, r.Language)
-	} else {
-		r.Log.Warn("llm reply is not the expected JSON, keeping it as text", "error", err)
+	if text == "" {
+		// A provider that answers nothing without an error (noop) means "no
+		// summary": the raw digest goes out and nothing failed.
+		return
 	}
-	report.Summary = r.scrub(PostProcess(text, r.MaxChars))
+	a, err := ParseAnalysis(text)
+	if err != nil {
+		// What did not parse was never held against the data, and it once
+		// told the operator to firewall the home network. It is not
+		// published, not even cut short: the digest goes out with the
+		// counters only, and the report says why.
+		report.LLM.Err = r.scrub(fmt.Errorf("%w: %w", ErrInvalidReply, err).Error())
+		r.Log.Warn("llm reply is not the expected JSON, sending raw digest", "provider", r.LLM.Name(), "error", err)
+		return
+	}
+	report.Summary = r.scrub(PostProcess(RenderAnalysis(a, report.Actors, r.Language), r.MaxChars))
 }
 
 func (r *Runner) deliver(ctx context.Context, report Report) []SinkStats {
