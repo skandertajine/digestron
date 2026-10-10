@@ -90,6 +90,29 @@ func TestIndexServed(t *testing.T) {
 	}
 }
 
+// The page has no JavaScript test harness: its phone and deep-link fixes were
+// measured in a browser (390 px iPhone viewport). This keeps a rewrite of the
+// page from dropping one of them without anyone noticing. Each snippet is the
+// load-bearing part of one fix.
+func TestIndexKeepsThePhoneAndLinkFixes(t *testing.T) {
+	page := string(indexHTML)
+	for _, want := range []struct{ snippet, why string }{
+		{"minmax(0, 1fr)", "a bare 1fr track made the page 532 px wide on a 390 px phone"},
+		{`class="table-wrap"`, "the findings table must scroll inside its own box, not widen the page"},
+		{`addEventListener("hashchange"`, "a second notification tapped with the page open must change the report"},
+		{"detailEl.scrollIntoView", "a run opened from a notification must land at the top, not under the list"},
+		{"Rapport introuvable", "a link to a run the history lost must say so"},
+		{"confirmStop(runState)", "stopping a scheduled run must ask first"},
+	} {
+		if !strings.Contains(page, want.snippet) {
+			t.Errorf("index.html lost %q: %s", want.snippet, want.why)
+		}
+	}
+	if strings.Contains(page, "if (!resp.ok) return;") {
+		t.Error("index.html drops a failed report fetch silently: a dead link shows a blank page")
+	}
+}
+
 func TestRunsListAndDetail(t *testing.T) {
 	srv, st, _ := testServer(t)
 	at := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)

@@ -51,8 +51,11 @@
     100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
   }
 
-  .app { display: grid; grid-template-columns: 400px 1fr; gap: 1.25rem; padding: 1.25rem 1.5rem 2rem; align-items: start; max-width: 1400px; margin: 0 auto; }
-  @media (max-width: 960px) { .app { grid-template-columns: 1fr; } }
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track never shrinks below its
+     widest content, so one wide table made the whole page 532 px wide on a
+     390 px iPhone. Wide content scrolls inside its own box instead. */
+  .app { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 1.25rem; padding: 1.25rem 1.5rem 2rem; align-items: start; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 960px) { .app { grid-template-columns: minmax(0, 1fr); } }
 
   .panel {
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -67,7 +70,15 @@
   .sidebar-head svg.spark { display: block; margin-top: .6rem; width: 100%; height: 28px; }
 
   .run-list { max-height: calc(100vh - 220px); overflow-y: auto; padding: .6rem; display: flex; flex-direction: column; gap: .45rem; }
-  @media (max-width: 960px) { .run-list { max-height: 46vh; } }
+  .list-toggle { display: none; font: 600 .7rem/1 var(--mono); color: var(--accent2); background: none; border: 1px solid var(--border); border-radius: 999px; padding: .4rem .7rem; margin-top: .6rem; cursor: pointer; }
+  /* One column: the run list sits above the report, so a phone opened from a
+     notification folds it away and the report comes first. */
+  @media (max-width: 960px) {
+    .run-list { max-height: 46vh; }
+    .list-toggle { display: inline-block; }
+    .sidebar.collapsed .run-list, .sidebar.collapsed svg.spark { display: none; }
+    .sidebar.collapsed .sidebar-head { border-bottom: 0; }
+  }
 
   .run-card {
     position: relative; cursor: pointer; padding: .7rem .8rem .7rem 1rem; border-radius: var(--radius-sm);
@@ -85,7 +96,7 @@
   .run-card .row1 { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
   .run-card time { font-family: var(--mono); font-size: .74rem; color: var(--muted); }
   .run-card .summary { font-size: .78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .run-card .meta { display: flex; gap: .6rem; font-size: .72rem; color: var(--muted-2); font-family: var(--mono); }
+  .run-card .meta { display: flex; flex-wrap: wrap; gap: .1rem .6rem; font-size: .72rem; color: var(--muted-2); font-family: var(--mono); }
   .run-card .meta .bad { color: var(--critical); }
 
   .kindtag { font: 600 .64rem/1 var(--mono); text-transform: uppercase; letter-spacing: .03em; padding: .18rem .45rem; border-radius: 999px; }
@@ -100,9 +111,23 @@
   .pill.critical { color: var(--critical); background: rgba(244,63,94,.14); }
   .pill.ok { color: var(--ok); background: rgba(16,185,129,.14); }
 
-  .detail { position: sticky; top: 5.2rem; padding: 1.4rem 1.5rem 1.6rem; min-height: 300px; }
+  .detail { position: sticky; top: 5.2rem; padding: 1.4rem 1.5rem 1.6rem; min-height: 300px; scroll-margin-top: 5.5rem; }
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem; padding: 4rem 1rem; color: var(--muted-2); text-align: center; }
   .empty svg { opacity: .5; }
+
+  .missing { display: flex; flex-direction: column; align-items: center; gap: .7rem; padding: 2.5rem .5rem; text-align: center; }
+  .missing h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+  .missing .why { color: var(--muted); font-size: .85rem; max-width: 34rem; }
+  .missing code { font: .72rem var(--mono); color: var(--muted-2); overflow-wrap: anywhere; }
+  .missing .near {
+    display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .45rem .6rem;
+    margin-top: .4rem; padding: .6rem .9rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    background: rgba(255,255,255,.03); color: var(--text); text-decoration: none;
+  }
+  .missing .near:hover { background: var(--surface-hover); }
+  .missing .near .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-2); }
+  .missing .near time { font: .8rem var(--mono); }
+  .missing .near .gap { font-size: .75rem; color: var(--muted); }
 
   .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
   .detail-head h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
@@ -111,29 +136,33 @@
   .summary-box {
     background: linear-gradient(180deg, rgba(99,102,241,.08), rgba(34,211,238,.04));
     border: 1px solid var(--border); border-left: 3px solid var(--accent1);
-    border-radius: var(--radius-sm); padding: .9rem 1.05rem; white-space: pre-wrap; font-size: .88rem; color: #d7dae4;
+    border-radius: var(--radius-sm); padding: .9rem 1.05rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; color: #d7dae4;
     margin-bottom: 1.4rem;
   }
 
   .actors { margin-bottom: 1.4rem; display: flex; flex-direction: column; gap: .5rem; }
   details.actor { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem .8rem; background: rgba(255,255,255,.02); }
   details.actor summary { cursor: pointer; font-size: .85rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
-  details.actor .who { color: var(--muted); font-size: .8rem; }
+  details.actor .who { color: var(--muted); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
   details.actor .ev { color: var(--muted-2); font-family: var(--mono); font-size: .72rem; margin-left: auto; }
   details.actor > .chips, .facet { margin-top: .5rem; }
   .facet { display: flex; gap: .5rem; align-items: baseline; }
   .facet .k { font-family: var(--mono); font-size: .7rem; color: var(--muted-2); min-width: 7.5rem; }
+  .facet .chips { min-width: 0; }
   .samples { margin-top: .6rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
   .sample { font-family: var(--mono); font-size: .7rem; color: var(--muted); white-space: pre-wrap; word-break: break-all; padding: .1rem 0; }
 
   h3.section { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 .6rem; font-weight: 600; }
 
-  table.findings { border-collapse: collapse; width: 100%; margin-bottom: 1.4rem; }
+  .table-wrap { overflow-x: auto; margin-bottom: 1.4rem; }
+  table.findings { border-collapse: collapse; width: 100%; }
   table.findings th { text-align: left; font-size: .72rem; font-weight: 500; color: var(--muted-2); padding: 0 .6rem .4rem; }
   table.findings td { padding: .5rem .6rem; border-top: 1px solid var(--border); font-size: .82rem; vertical-align: top; }
   table.findings tr:hover td { background: rgba(255,255,255,.02); }
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
-  .chip { font-family: var(--mono); font-size: .7rem; color: var(--muted); background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; padding: .05rem .4rem; }
+  .chip { font-family: var(--mono); font-size: .7rem; color: var(--muted); background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; padding: .05rem .4rem; overflow-wrap: anywhere; }
+  /* In the table a chip stays whole: the table scrolls sideways instead. */
+  table.findings .chip { white-space: nowrap; overflow-wrap: normal; }
 
   .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; margin-bottom: 1.4rem; }
   .stat-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem .7rem; background: rgba(255,255,255,.02); }
@@ -145,10 +174,10 @@
   .stat-card .err { font-size: .72rem; color: var(--critical); margin-top: .25rem; word-break: break-word; }
 
   .llm-bar { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-  .llm-bar .item { flex: 1 1 120px; padding: .65rem .85rem; border-right: 1px solid var(--border); }
+  .llm-bar .item { flex: 1 1 120px; min-width: 0; padding: .65rem .85rem; border-right: 1px solid var(--border); }
   .llm-bar .item:last-child { border-right: none; }
   .llm-bar .item .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-2); margin-bottom: .2rem; }
-  .llm-bar .item .v { font-family: var(--mono); font-size: .85rem; }
+  .llm-bar .item .v { font-family: var(--mono); font-size: .85rem; overflow-wrap: anywhere; }
   .llm-bar .item .v.fail { color: var(--critical); }
   .llm-bar .item .v.disabled { color: var(--muted-2); }
 
@@ -161,6 +190,7 @@
     padding: .55rem 1rem; background: linear-gradient(120deg, var(--accent1), var(--accent2));
     box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset; transition: opacity .15s ease, transform .15s ease;
   }
+  .btn, .check { white-space: nowrap; }
   .btn:hover:not(:disabled) { transform: translateY(-1px); }
   .btn:disabled { opacity: .55; cursor: progress; font-family: var(--mono); font-weight: 500; }
 
@@ -200,7 +230,7 @@
   .runtag button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0 .35rem; }
   .logs-note { padding: .45rem 1.1rem; color: var(--warning); font: .75rem var(--mono); border-bottom: 1px solid var(--border); }
   .logs-body { font: 12px/1.6 var(--mono); max-height: 46vh; overflow: auto; padding: .4rem 0; }
-  .log-row { display: grid; grid-template-columns: 6.4rem 3.4rem 1fr; gap: .7rem; padding: .05rem 1.1rem; }
+  .log-row { display: grid; grid-template-columns: 6.4rem 3.4rem minmax(0, 1fr); gap: .7rem; padding: .05rem 1.1rem; }
   .log-row:hover { background: var(--surface-hover); }
   .log-row .t { color: var(--muted-2); }
   .log-row .lv { font-weight: 700; }
@@ -212,6 +242,27 @@
   .log-row a.rtag { margin-left: .5rem; font-size: .72rem; }
   .logs-link:hover, .log-row a.rtag:hover { text-decoration: underline; }
   .logs-empty { padding: 2rem 1.1rem; text-align: center; color: var(--muted-2); font-family: var(--sans); }
+
+  /* A phone: the header wraps rather than pushes the page wider (a run in
+     flight adds a longer button and Stop), and the side padding shrinks. */
+  @media (max-width: 600px) {
+    header { flex-wrap: wrap; gap: .4rem .8rem; padding: .7rem 1rem; }
+    .brand .tag { display: none; }
+    .actions { flex-wrap: wrap; justify-content: flex-end; gap: .4rem .7rem; }
+    .app { padding: 1rem 1rem 1.5rem; gap: 1rem; }
+    .strip, .checkresults, .logs-panel { padding: 0 1rem; }
+    .detail { padding: 1.1rem 1rem 1.3rem; }
+    .facet .k { min-width: 5.5rem; }
+    /* Five columns do not fit in 320 px: each finding becomes a small card,
+       severity, title and count on top, then its source and breakdown. */
+    table.findings thead { display: none; }
+    table.findings, table.findings tbody { display: block; }
+    table.findings tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .3rem .6rem; align-items: baseline; padding: .55rem 0; border-top: 1px solid var(--border); }
+    table.findings td { display: block; padding: 0; border-top: 0; }
+    table.findings td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; font-size: .72rem; }
+    table.findings td:nth-child(5) { grid-column: 1 / -1; }
+    table.findings .chip { white-space: normal; overflow-wrap: anywhere; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
     .dot, .run-card { animation: none !important; }
@@ -253,13 +304,14 @@
 </section>
 
 <main class="app">
-  <section class="panel">
+  <section class="panel sidebar" id="sidebar">
     <div class="sidebar-head">
       <div class="totals">
         <div class="count" id="run-count">0<small>runs kept</small></div>
         <div class="tokens" id="token-total">0 tokens</div>
       </div>
       <svg class="spark" id="spark" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
+      <button type="button" class="list-toggle" id="list-toggle" aria-controls="runs" aria-expanded="true">masquer la liste</button>
     </div>
     <div id="runs" class="run-list"></div>
   </section>
@@ -307,6 +359,11 @@ const nsToMs = n => Math.round((n || 0) / 1e6);
 const fmtTime = d => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 let selected = null;
 let lastRuns = [];
+let showSeq = 0; // bumped by every show(): only the latest one may paint the report
+const headerEl = document.querySelector("header");
+const detailEl = document.getElementById("detail");
+const sidebarEl = document.getElementById("sidebar");
+const listToggle = document.getElementById("list-toggle");
 
 function sparkline(points) {
   if (points.length < 2) return "";
@@ -366,7 +423,7 @@ async function refresh() {
   document.getElementById("spark").innerHTML = sparkline(series);
 
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
-    el.addEventListener("click", () => show(el.dataset.id)));
+    el.addEventListener("click", () => show(el.dataset.id, true)));
   document.querySelectorAll(".logs-link[data-run]").forEach(el =>
     el.addEventListener("click", ev => { ev.stopPropagation(); setLogRun(el.dataset.run, true); }));
 }
@@ -395,15 +452,104 @@ function actorsBlock(actors) {
   return `<h3 class="section">top IPs investigated</h3><div class="actors">${rows}</div>`;
 }
 
-async function show(id) {
+// revealDetail brings the report to the top of the screen, under the sticky
+// header. On a phone the report comes after the run list, below the fold: a
+// tap on a notification used to land on a list the reader had not come for.
+// A report already near the top (the desktop layout) is left where it is.
+function revealDetail() {
+  const head = headerEl.offsetHeight; // the header wraps on a narrow screen
+  const top = detailEl.getBoundingClientRect().top;
+  if (top >= head && top <= head + window.innerHeight / 4) return;
+  detailEl.style.scrollMarginTop = head + 12 + "px";
+  detailEl.scrollIntoView({ block: "start" });
+}
+
+function syncListToggle() {
+  const open = !sidebarEl.classList.contains("collapsed");
+  listToggle.setAttribute("aria-expanded", String(open));
+  listToggle.textContent = open ? "masquer la liste" : "voir les runs";
+}
+
+listToggle.addEventListener("click", () => {
+  sidebarEl.classList.toggle("collapsed");
+  syncListToggle();
+});
+
+// nearestRun picks the run to offer when a linked one is gone. A run ID is
+// its start time, so the closest one in time is a fair guess at what the
+// reader was after; a notification comes from a digest, not a dry test, so
+// those come first. The server's own suggestion wins when it gives one.
+function nearestRun(id, body) {
+  const hint = body && (typeof body.nearest === "string" ? body.nearest : body.nearest && body.nearest.id);
+  if (hint) return { run: lastRuns.find(r => r.id === hint) || { id: hint }, label: "run le plus proche" };
+  const digests = lastRuns.filter(r => r.kind !== "test");
+  const runs = digests.length ? digests : lastRuns; // newest first
+  if (!runs.length) return null;
+  const t = new Date(id).getTime();
+  if (isNaN(t)) return { run: runs[0], label: "dernier run" };
+  const gap = r => new Date(r.id).getTime() - t;
+  const best = runs.reduce((a, r) => Math.abs(gap(r)) < Math.abs(gap(a)) ? r : a);
+  return { run: best, label: "run le plus proche", gap: gap(best) };
+}
+
+function gapText(ms) {
+  const min = Math.round(Math.abs(ms) / 60000);
+  if (min === 0) return "même minute";
+  const h = Math.floor(min / 60), m = min % 60;
+  const n = min < 60 ? `${min} min` : h < 48 ? `${h} h${m ? " " + String(m).padStart(2, "0") : ""}` : `${Math.round(h / 24)} j`;
+  return `${n} ${ms > 0 ? "plus tard" : "plus tôt"}`;
+}
+
+// missingRun is what a link to a run the history does not hold shows, in
+// place of the blank page it used to leave: the history is capped, and
+// without a disk every redeploy empties it. status 0 is a failed fetch.
+function missingRun(id, status, body) {
+  const gone = status === 404 || status === 410;
+  const at = new Date(id);
+  const title = status === 0 ? "Serveur injoignable" : gone ? "Rapport introuvable" : `Rapport indisponible (HTTP ${status})`;
+  const why = status === 0 ? "Le rapport n'a pas pu être chargé : le serveur ne répond pas."
+    : !gone ? "Le serveur n'a pas rendu ce rapport."
+    : isNaN(at) ? "Ce lien ne désigne aucun run."
+    : `Le run du ${esc(fmtTime(at))} n'est pas, ou plus, dans l'historique : purgé, ou perdu lors d'un redéploiement.`;
+  const near = status === 0 ? null : nearestRun(id, body);
+  const offer = near ? `
+      <a class="near" href="#run=${esc(encodeURIComponent(near.run.id))}">
+        <span class="k">${esc(near.label)}</span>
+        ${near.run.verdict ? pill(near.run.verdict) : ""}
+        <time>${esc(fmtTime(near.run.generated_at || near.run.id))}</time>
+        ${near.gap !== undefined ? `<span class="gap">${esc(gapText(near.gap))}</span>` : ""}
+      </a>`
+    : gone ? `<p class="why">L'historique est vide pour l'instant.</p>` : "";
+  return `
+    <div class="missing" role="status">
+      <h2>${esc(title)}</h2>
+      <p class="why">${why}</p>
+      <code>${esc(id)}</code>
+      ${offer}
+    </div>`;
+}
+
+// show paints one run's report. reveal scrolls it into view: a link, or a
+// tap on a card whose report is below it on a phone.
+async function show(id, reveal) {
   if (location.hash !== "#run=" + id) history.replaceState(null, "", "#run=" + id);
+  const seq = ++showSeq;
   selected = id;
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
     el.classList.toggle("selected", el.dataset.id === id));
 
-  const resp = await fetch("api/runs/" + encodeURIComponent(id));
-  if (!resp.ok) return;
-  const { report: r } = await resp.json();
+  let resp = null, body = null;
+  try {
+    resp = await fetch("api/runs/" + encodeURIComponent(id));
+    body = await resp.json().catch(() => null); // a plain-text 404 has no JSON
+  } catch (e) { /* unreachable: resp stays null */ }
+  if (seq !== showSeq) return; // a later link or click won the race
+  if (!resp || !resp.ok || !body || !body.report) {
+    detailEl.innerHTML = missingRun(id, resp ? resp.status : 0, body);
+    if (reveal) revealDetail();
+    return;
+  }
+  const r = body.report;
 
   const findingsRows = (r.findings || []).map(f => `
     <tr>
@@ -430,16 +576,23 @@ async function show(id) {
     </div>`).join("") || `<div style="color:var(--muted-2);font-size:.8rem">none</div>`;
 
   const l = r.llm || {};
+  // model_digest is the weights the server actually ran, which an alias can
+  // hide (qwen3.5:9b answering with a 4B). Older runs do not have it.
+  const digest = typeof l.model_digest === "string" ? l.model_digest.replace(/^sha256:/, "") : "";
+  const served = digest
+    ? `<div class="item"><div class="k">served digest</div><div class="v" title="${esc(l.model_digest)}">${esc(digest.slice(0, 12))}</div></div>`
+    : "";
   const llmBar = l.provider ? `
     <div class="item"><div class="k">provider</div><div class="v">${esc(l.provider)}</div></div>
     <div class="item"><div class="k">model</div><div class="v">${esc(l.model || "—")}</div></div>
+    ${served}
     <div class="item"><div class="k">prompt tok</div><div class="v">${l.prompt_tokens || 0}</div></div>
     <div class="item"><div class="k">completion tok</div><div class="v">${l.completion_tokens || 0}</div></div>
     <div class="item"><div class="k">duration</div><div class="v">${ms(nsToMs(l.duration))}</div></div>
     <div class="item"><div class="k">status</div><div class="v ${l.error ? "fail" : ""}">${esc(l.error || "ok")}</div></div>`
     : `<div class="item"><div class="k">llm</div><div class="v disabled">disabled for this run</div></div>`;
 
-  document.getElementById("detail").innerHTML = `
+  detailEl.innerHTML = `
     <div class="detail-head">
       <div>
         <h2>${esc(r.title)}</h2>
@@ -452,10 +605,12 @@ async function show(id) {
     ${actorsBlock(r.actors)}
 
     <h3 class="section">findings received</h3>
-    <table class="findings">
-      <thead><tr><th>severity</th><th>source</th><th>finding</th><th>count</th><th>breakdown</th></tr></thead>
-      <tbody>${findingsRows}</tbody>
-    </table>
+    <div class="table-wrap">
+      <table class="findings">
+        <thead><tr><th>severity</th><th>source</th><th>finding</th><th>count</th><th>breakdown</th></tr></thead>
+        <tbody>${findingsRows}</tbody>
+      </table>
+    </div>
 
     <h3 class="section">sources</h3>
     <div class="stat-grid">${sourceCards}</div>
@@ -466,7 +621,27 @@ async function show(id) {
     <h3 class="section">llm</h3>
     <div class="llm-bar">${llmBar}</div>
   `;
+  if (reveal) revealDetail();
 }
+
+// openFromHash opens the run a notification links to (#run=<id>), on load
+// and on every hashchange: a second notification tapped while the page is
+// open only changes the hash, and must still change the report shown. On a
+// phone the run list folds away so the report comes first; the desktop
+// layout ignores the fold.
+async function openFromHash() {
+  const m = location.hash.match(/^#run=(.+)$/);
+  if (!m) return;
+  let id = m[1];
+  try { id = decodeURIComponent(id); } catch (e) { /* a malformed escape: try it as written */ }
+  sidebarEl.classList.add("collapsed");
+  syncListToggle();
+  await show(id, true);
+}
+
+// The list is reloaded first: the run a fresh notification points to is
+// newer than the list this page loaded.
+window.addEventListener("hashchange", () => { refresh().catch(() => {}).then(openFromHash); });
 
 // Run now. The request returns at once; the run itself can take minutes, so
 // the page follows it through api/run until it ends, then reloads the list.
@@ -476,6 +651,7 @@ const dryBox = document.getElementById("dry");
 const flashEl = document.getElementById("flash");
 const phaseEl = document.getElementById("st-phase");
 let watching = false;
+let runState = { running: false }; // the last api/run answer, for the Stop button
 
 function flash(msg) {
   flashEl.textContent = msg;
@@ -483,6 +659,7 @@ function flash(msg) {
 }
 
 function renderStatus(s) {
+  runState = s;
   runBtn.disabled = !!s.running;
   cancelBtn.hidden = !s.running;
   if (s.running) {
@@ -497,7 +674,18 @@ function renderStatus(s) {
   }
 }
 
+// A scheduled run is the hourly digest itself: stopping it loses that hour,
+// and nothing replays it. A manual or test run costs one more press to
+// start again, so only the scheduled one asks first.
+function confirmStop(s) {
+  if (s.kind !== "schedule") return true;
+  const at = s.started_at ? new Date(s.started_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+  return confirm(`Arrêter le digest planifié${at ? " de " + at : ""} ?\n\n` +
+    "Aucune notification ne partira pour cette heure, et elle ne sera pas rejouée.");
+}
+
 cancelBtn.addEventListener("click", async () => {
+  if (!confirmStop(runState)) return;
   cancelBtn.disabled = true;
   try {
     const resp = await fetch("api/run", { method: "DELETE" });
@@ -830,17 +1018,16 @@ checkBtn.addEventListener("click", async () => {
   }
 });
 
-pollStatus();
+const firstStatus = pollStatus();
 setInterval(pollStatus, 5000);
 
 resetLogs();
 const logTimer = setInterval(pollLogs, 2000);
 
-refresh().then(() => {
-  // A notification links here as #run=<id>: open that run directly.
-  const m = location.hash.match(/^#run=(.+)$/);
-  if (m) show(decodeURIComponent(m[1]));
-});
+// A notification links here as #run=<id>: open that run once the list and
+// the status strip are in, so neither grows above the report after it has
+// been scrolled to the top.
+Promise.allSettled([refresh(), firstStatus]).then(openFromHash);
 watchRun(); // the page may open while the hourly run is in flight
 setInterval(refresh, 30000);
 </script>
