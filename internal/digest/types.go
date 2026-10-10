@@ -99,8 +99,13 @@ func (s SourceStats) Partial() bool { return s.Err != "" && s.Findings > 0 }
 
 // LLMStats records the summarization cost of one run.
 type LLMStats struct {
-	Provider         string        `json:"provider,omitempty"`
-	Model            string        `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"` // the name asked for
+	// ModelDigest and ModelSize identify the weights that actually answered,
+	// when the provider can tell: a model name is an alias the server may
+	// point at another build (e.g. "4.7B Q4_K_M" behind a "9b" tag).
+	ModelDigest      string        `json:"model_digest,omitempty"`
+	ModelSize        string        `json:"model_size,omitempty"`
 	PromptTokens     int           `json:"prompt_tokens,omitempty"`
 	CompletionTokens int           `json:"completion_tokens,omitempty"`
 	Duration         time.Duration `json:"duration,omitempty"`
@@ -149,8 +154,12 @@ type Request struct {
 
 // Response is the LLM output with its token cost.
 type Response struct {
-	Text             string
-	Model            string
+	Text  string
+	Model string
+	// ModelDigest and ModelSize identify the weights behind Model, when the
+	// provider knows them; empty otherwise.
+	ModelDigest      string
+	ModelSize        string
 	PromptTokens     int
 	CompletionTokens int
 }

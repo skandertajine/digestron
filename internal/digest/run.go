@@ -185,11 +185,14 @@ func (r *Runner) summarize(ctx context.Context, report *Report) {
 	start := time.Now()
 	resp, err := r.LLM.Complete(lctx, req)
 	r.Log.Debug("llm response", "provider", r.LLM.Name(), "model", resp.Model,
+		"model_digest", resp.ModelDigest, "model_size", resp.ModelSize,
 		"prompt_tokens", resp.PromptTokens, "completion_tokens", resp.CompletionTokens,
 		"ms", time.Since(start).Milliseconds(), "reply_bytes", len(resp.Text), "failed", err != nil)
 	report.LLM = LLMStats{
 		Provider:         r.LLM.Name(),
 		Model:            resp.Model,
+		ModelDigest:      resp.ModelDigest,
+		ModelSize:        resp.ModelSize,
 		PromptTokens:     resp.PromptTokens,
 		CompletionTokens: resp.CompletionTokens,
 		Duration:         time.Since(start),

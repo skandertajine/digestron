@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -479,4 +480,23 @@ func (c *countingLLM) Name() string { return "counting" }
 func (c *countingLLM) Complete(context.Context, Request) (Response, error) {
 	c.calls.Add(1)
 	return Response{Text: "x", Model: "m"}, nil
+}
+
+// The report names the weights that answered, not only the alias asked for,
+// and stays silent about them when the provider cannot tell.
+func TestRunRecordsTheModelActuallyServed(t *testing.T) {
+	r := &Runner{Title: "t", Window: time.Hour, Log: quietLogger(),
+		LLM: fakeLLM{resp: Response{Text: "x", Model: "qwen3.5:9b", ModelDigest: "5b0d1a4e", ModelSize: "4.7B Q4_K_M"}}}
+	got := r.Run(context.Background()).LLM
+	if got.Model != "qwen3.5:9b" || got.ModelDigest != "5b0d1a4e" || got.ModelSize != "4.7B Q4_K_M" {
+		t.Errorf("llm stats = %+v", got)
+	}
+
+	raw, err := json.Marshal(LLMStats{Provider: "openai-compatible", Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "model_digest") || strings.Contains(string(raw), "model_size") {
+		t.Errorf("unknown identification must be omitted: %s", raw)
+	}
 }
