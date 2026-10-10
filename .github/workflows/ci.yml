@@ -29,7 +29,9 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          # Pinned, like govulncheck below: a new release must not turn a
+          # commit red on its own.
+          version: v2.14.0
 
   vuln:
     runs-on: ubuntu-latest
@@ -38,4 +40,4 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
