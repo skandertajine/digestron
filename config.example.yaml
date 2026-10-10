@@ -82,6 +82,13 @@ llm:
     num_ctx: 8192 # explicit: the server default silently truncates
     keep_alive: 10m
     think: false # reasoning models: spend num_predict on the answer, not a trace
+    # Sampling: unset keeps the Modelfile's value, often tuned for chat. Set,
+    # it is sent even at 0 (how presence_penalty is switched off). Unknown
+    # keys are refused at start, so a typo cannot leave the default in place.
+    # temperature: 0.2
+    # top_p: 0.9
+    # presence_penalty: 0
+    # seed: 42 # same request, same reply
     # openai-compatible variant (works with OpenAI, a LiteLLM proxy, vLLM,
     # LM Studio, Groq, Mistral...):
     #   url: http://litellm:4000
@@ -102,6 +109,7 @@ sinks:
       # template: "{{ .Verdict }} — {{ .Summary }}" # optional message override
       # link: http://digestron.example/ # teaser notification, tap opens the full report
       # max_chars: 450 # cap on the notification text
+      # group: digestron # phone thread; quiet hours replace each other under <group>-info
 
   - name: mail
     type: email

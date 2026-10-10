@@ -152,17 +152,22 @@ analysed text, `http.response.status_code` through a numeric `range`:
 
 | Type | Notes |
 |---|---|
-| `ollama` | Native `/api/chat`: explicit `num_ctx` (the server default silently truncates long prompts), `think: false` by default (a reasoning model otherwise spends the whole budget on its trace and returns nothing), `keep_alive` to skip cold starts. |
+| `ollama` | Native `/api/chat`: explicit `num_ctx` (the server default silently truncates long prompts), `think: false` by default (a reasoning model otherwise spends the whole budget on its trace and returns nothing), `keep_alive` to skip cold starts. Sampling (`temperature`, `top_p`, `presence_penalty`, `seed`) is sent only when set, so the Modelfile's chat-tuned values do not leak into a report; unknown keys fail the start. Each run records the digest and size of the weights the server actually ran (`llm.model_digest`, `llm.model_size`): a tag is an alias. |
 | `openai-compatible` | Any `/v1/chat/completions`: OpenAI, a [LiteLLM](https://github.com/BerriAI/litellm) proxy (→ 100+ providers), vLLM, LM Studio, Groq, Mistral. The max-tokens field name is configurable because implementations disagree. |
 | `noop` | No LLM. The digest is the raw counters. Also available as `run -no-llm`. |
 
 When the LLM is down, the digest still goes out — raw counters beat silence.
+The same goes for a reply that is not the expected JSON: it is never
+published, the digest goes out with its counters and `llm.error` says
+`invalid_reply`. The model describes what the data shows and nothing else:
+the schema has no field for advice, so no free-text "block this range" ever
+reaches the phone.
 
 ## Sinks
 
 | Type | Notes |
 |---|---|
-| `homeassistant` | `notify.<service>` call; the message is the LLM summary, falling back to the raw digest. Either way it carries the sources that did not fully answer, and the title is marked `PARTIAL` when there are any — the verdict is the max over the findings that *survived*, so an incomplete run is otherwise indistinguishable from a quiet one on a locked screen. |
+| `homeassistant` | `notify.<service>` call; the message is the LLM summary, falling back to the raw digest. Either way it carries the sources that did not fully answer, and the title is marked `PARTIAL` when there are any — the verdict is the max over the findings that *survived*, so an incomplete run is otherwise indistinguishable from a quiet one on a locked screen. Delivery follows the verdict (companion app keys): a complete `INFO` is passive and tagged `<group>-info`, so quiet hours neither ring nor pile up; `WARNING` and an incomplete `INFO` are active and stay; `CRITICAL` is time-sensitive. `group` (default `digestron`) keeps instances apart. |
 | `email` | SMTP with STARTTLS; subject templated on the report. |
 | `webhook` | Generic escape hatch: method, headers, `text/template` body over the report (`rendertext`, `sourceproblems`, `tojson` helpers). |
 
