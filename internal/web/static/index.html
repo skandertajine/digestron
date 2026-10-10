@@ -51,8 +51,11 @@
     100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
   }
 
-  .app { display: grid; grid-template-columns: 400px 1fr; gap: 1.25rem; padding: 1.25rem 1.5rem 2rem; align-items: start; max-width: 1400px; margin: 0 auto; }
-  @media (max-width: 960px) { .app { grid-template-columns: 1fr; } }
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track never shrinks below its
+     widest content, so one wide table made the whole page 532 px wide on a
+     390 px iPhone. Wide content scrolls inside its own box instead. */
+  .app { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 1.25rem; padding: 1.25rem 1.5rem 2rem; align-items: start; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 960px) { .app { grid-template-columns: minmax(0, 1fr); } }
 
   .panel {
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -85,7 +88,7 @@
   .run-card .row1 { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
   .run-card time { font-family: var(--mono); font-size: .74rem; color: var(--muted); }
   .run-card .summary { font-size: .78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .run-card .meta { display: flex; gap: .6rem; font-size: .72rem; color: var(--muted-2); font-family: var(--mono); }
+  .run-card .meta { display: flex; flex-wrap: wrap; gap: .1rem .6rem; font-size: .72rem; color: var(--muted-2); font-family: var(--mono); }
   .run-card .meta .bad { color: var(--critical); }
 
   .kindtag { font: 600 .64rem/1 var(--mono); text-transform: uppercase; letter-spacing: .03em; padding: .18rem .45rem; border-radius: 999px; }
@@ -111,29 +114,33 @@
   .summary-box {
     background: linear-gradient(180deg, rgba(99,102,241,.08), rgba(34,211,238,.04));
     border: 1px solid var(--border); border-left: 3px solid var(--accent1);
-    border-radius: var(--radius-sm); padding: .9rem 1.05rem; white-space: pre-wrap; font-size: .88rem; color: #d7dae4;
+    border-radius: var(--radius-sm); padding: .9rem 1.05rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; color: #d7dae4;
     margin-bottom: 1.4rem;
   }
 
   .actors { margin-bottom: 1.4rem; display: flex; flex-direction: column; gap: .5rem; }
   details.actor { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem .8rem; background: rgba(255,255,255,.02); }
   details.actor summary { cursor: pointer; font-size: .85rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
-  details.actor .who { color: var(--muted); font-size: .8rem; }
+  details.actor .who { color: var(--muted); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
   details.actor .ev { color: var(--muted-2); font-family: var(--mono); font-size: .72rem; margin-left: auto; }
   details.actor > .chips, .facet { margin-top: .5rem; }
   .facet { display: flex; gap: .5rem; align-items: baseline; }
   .facet .k { font-family: var(--mono); font-size: .7rem; color: var(--muted-2); min-width: 7.5rem; }
+  .facet .chips { min-width: 0; }
   .samples { margin-top: .6rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
   .sample { font-family: var(--mono); font-size: .7rem; color: var(--muted); white-space: pre-wrap; word-break: break-all; padding: .1rem 0; }
 
   h3.section { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 .6rem; font-weight: 600; }
 
-  table.findings { border-collapse: collapse; width: 100%; margin-bottom: 1.4rem; }
+  .table-wrap { overflow-x: auto; margin-bottom: 1.4rem; }
+  table.findings { border-collapse: collapse; width: 100%; }
   table.findings th { text-align: left; font-size: .72rem; font-weight: 500; color: var(--muted-2); padding: 0 .6rem .4rem; }
   table.findings td { padding: .5rem .6rem; border-top: 1px solid var(--border); font-size: .82rem; vertical-align: top; }
   table.findings tr:hover td { background: rgba(255,255,255,.02); }
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
-  .chip { font-family: var(--mono); font-size: .7rem; color: var(--muted); background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; padding: .05rem .4rem; }
+  .chip { font-family: var(--mono); font-size: .7rem; color: var(--muted); background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; padding: .05rem .4rem; overflow-wrap: anywhere; }
+  /* In the table a chip stays whole: the table scrolls sideways instead. */
+  table.findings .chip { white-space: nowrap; overflow-wrap: normal; }
 
   .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; margin-bottom: 1.4rem; }
   .stat-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem .7rem; background: rgba(255,255,255,.02); }
@@ -145,10 +152,10 @@
   .stat-card .err { font-size: .72rem; color: var(--critical); margin-top: .25rem; word-break: break-word; }
 
   .llm-bar { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-  .llm-bar .item { flex: 1 1 120px; padding: .65rem .85rem; border-right: 1px solid var(--border); }
+  .llm-bar .item { flex: 1 1 120px; min-width: 0; padding: .65rem .85rem; border-right: 1px solid var(--border); }
   .llm-bar .item:last-child { border-right: none; }
   .llm-bar .item .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-2); margin-bottom: .2rem; }
-  .llm-bar .item .v { font-family: var(--mono); font-size: .85rem; }
+  .llm-bar .item .v { font-family: var(--mono); font-size: .85rem; overflow-wrap: anywhere; }
   .llm-bar .item .v.fail { color: var(--critical); }
   .llm-bar .item .v.disabled { color: var(--muted-2); }
 
@@ -161,6 +168,7 @@
     padding: .55rem 1rem; background: linear-gradient(120deg, var(--accent1), var(--accent2));
     box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset; transition: opacity .15s ease, transform .15s ease;
   }
+  .btn, .check { white-space: nowrap; }
   .btn:hover:not(:disabled) { transform: translateY(-1px); }
   .btn:disabled { opacity: .55; cursor: progress; font-family: var(--mono); font-weight: 500; }
 
@@ -200,7 +208,7 @@
   .runtag button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0 .35rem; }
   .logs-note { padding: .45rem 1.1rem; color: var(--warning); font: .75rem var(--mono); border-bottom: 1px solid var(--border); }
   .logs-body { font: 12px/1.6 var(--mono); max-height: 46vh; overflow: auto; padding: .4rem 0; }
-  .log-row { display: grid; grid-template-columns: 6.4rem 3.4rem 1fr; gap: .7rem; padding: .05rem 1.1rem; }
+  .log-row { display: grid; grid-template-columns: 6.4rem 3.4rem minmax(0, 1fr); gap: .7rem; padding: .05rem 1.1rem; }
   .log-row:hover { background: var(--surface-hover); }
   .log-row .t { color: var(--muted-2); }
   .log-row .lv { font-weight: 700; }
@@ -212,6 +220,27 @@
   .log-row a.rtag { margin-left: .5rem; font-size: .72rem; }
   .logs-link:hover, .log-row a.rtag:hover { text-decoration: underline; }
   .logs-empty { padding: 2rem 1.1rem; text-align: center; color: var(--muted-2); font-family: var(--sans); }
+
+  /* A phone: the header wraps rather than pushes the page wider (a run in
+     flight adds a longer button and Stop), and the side padding shrinks. */
+  @media (max-width: 600px) {
+    header { flex-wrap: wrap; gap: .4rem .8rem; padding: .7rem 1rem; }
+    .brand .tag { display: none; }
+    .actions { flex-wrap: wrap; justify-content: flex-end; gap: .4rem .7rem; }
+    .app { padding: 1rem 1rem 1.5rem; gap: 1rem; }
+    .strip, .checkresults, .logs-panel { padding: 0 1rem; }
+    .detail { padding: 1.1rem 1rem 1.3rem; }
+    .facet .k { min-width: 5.5rem; }
+    /* Five columns do not fit in 320 px: each finding becomes a small card,
+       severity, title and count on top, then its source and breakdown. */
+    table.findings thead { display: none; }
+    table.findings, table.findings tbody { display: block; }
+    table.findings tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .3rem .6rem; align-items: baseline; padding: .55rem 0; border-top: 1px solid var(--border); }
+    table.findings td { display: block; padding: 0; border-top: 0; }
+    table.findings td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; font-size: .72rem; }
+    table.findings td:nth-child(5) { grid-column: 1 / -1; }
+    table.findings .chip { white-space: normal; overflow-wrap: anywhere; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
     .dot, .run-card { animation: none !important; }
@@ -452,10 +481,12 @@ async function show(id) {
     ${actorsBlock(r.actors)}
 
     <h3 class="section">findings received</h3>
-    <table class="findings">
-      <thead><tr><th>severity</th><th>source</th><th>finding</th><th>count</th><th>breakdown</th></tr></thead>
-      <tbody>${findingsRows}</tbody>
-    </table>
+    <div class="table-wrap">
+      <table class="findings">
+        <thead><tr><th>severity</th><th>source</th><th>finding</th><th>count</th><th>breakdown</th></tr></thead>
+        <tbody>${findingsRows}</tbody>
+      </table>
+    </div>
 
     <h3 class="section">sources</h3>
     <div class="stat-grid">${sourceCards}</div>
