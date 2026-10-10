@@ -63,6 +63,19 @@ data:
               severity: { warning: 1300, critical: 2000 }
             - preset: nginx_public
 
+      # Cibles Prometheus en panne au moins 10 minutes dans l'heure (scrape a
+      # 15 s). Le seuil de 10 minutes ecarte les trous de 1 a 6 minutes que
+      # laisse un rollout ; group compte un point par cible, meme si plusieurs
+      # pods la partagent (les 3 traefik sur 192.168.0.252:8080).
+      - name: prom
+        type: prometheus
+        settings:
+          url: http://prometheus.prometheus.svc.cluster.local:9090
+          queries:
+            - name: "cibles supervisées en panne dans l'heure"
+              query: "group by (job, namespace, instance) (count_over_time((up == 0)[1h:1m]) >= 10)"
+              severity: { warning: 1, critical: 10 }
+
     llm:
       type: ollama
       timeout: 300s
