@@ -49,6 +49,12 @@ data:
         model: qwen3.5:9b
         num_ctx: 16384
         keep_alive: -1m
+        # echantillonnage pour un rapport factuel et rejouable, au lieu des
+        # valeurs "chat" du modelfile (audit du 10/10 : temperature 1,
+        # presence_penalty 1.5) ; top_p reste celui du modelfile
+        temperature: 0.2
+        presence_penalty: 0
+        seed: 42
 
     sinks:
       - name: phone
