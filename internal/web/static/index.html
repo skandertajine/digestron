@@ -115,6 +115,20 @@
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem; padding: 4rem 1rem; color: var(--muted-2); text-align: center; }
   .empty svg { opacity: .5; }
 
+  .missing { display: flex; flex-direction: column; align-items: center; gap: .7rem; padding: 2.5rem .5rem; text-align: center; }
+  .missing h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+  .missing .why { color: var(--muted); font-size: .85rem; max-width: 34rem; }
+  .missing code { font: .72rem var(--mono); color: var(--muted-2); overflow-wrap: anywhere; }
+  .missing .near {
+    display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .45rem .6rem;
+    margin-top: .4rem; padding: .6rem .9rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    background: rgba(255,255,255,.03); color: var(--text); text-decoration: none;
+  }
+  .missing .near:hover { background: var(--surface-hover); }
+  .missing .near .k { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-2); }
+  .missing .near time { font: .8rem var(--mono); }
+  .missing .near .gap { font-size: .75rem; color: var(--muted); }
+
   .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
   .detail-head h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
   .detail-head time { display: block; font-family: var(--mono); font-size: .76rem; color: var(--muted); margin-top: .25rem; }
@@ -461,6 +475,60 @@ listToggle.addEventListener("click", () => {
   syncListToggle();
 });
 
+// nearestRun picks the run to offer when a linked one is gone. A run ID is
+// its start time, so the closest one in time is a fair guess at what the
+// reader was after; a notification comes from a digest, not a dry test, so
+// those come first. The server's own suggestion wins when it gives one.
+function nearestRun(id, body) {
+  const hint = body && (typeof body.nearest === "string" ? body.nearest : body.nearest && body.nearest.id);
+  if (hint) return { run: lastRuns.find(r => r.id === hint) || { id: hint }, label: "run le plus proche" };
+  const digests = lastRuns.filter(r => r.kind !== "test");
+  const runs = digests.length ? digests : lastRuns; // newest first
+  if (!runs.length) return null;
+  const t = new Date(id).getTime();
+  if (isNaN(t)) return { run: runs[0], label: "dernier run" };
+  const gap = r => new Date(r.id).getTime() - t;
+  const best = runs.reduce((a, r) => Math.abs(gap(r)) < Math.abs(gap(a)) ? r : a);
+  return { run: best, label: "run le plus proche", gap: gap(best) };
+}
+
+function gapText(ms) {
+  const min = Math.round(Math.abs(ms) / 60000);
+  if (min === 0) return "même minute";
+  const h = Math.floor(min / 60), m = min % 60;
+  const n = min < 60 ? `${min} min` : h < 48 ? `${h} h${m ? " " + String(m).padStart(2, "0") : ""}` : `${Math.round(h / 24)} j`;
+  return `${n} ${ms > 0 ? "plus tard" : "plus tôt"}`;
+}
+
+// missingRun is what a link to a run the history does not hold shows, in
+// place of the blank page it used to leave: the history is capped, and
+// without a disk every redeploy empties it. status 0 is a failed fetch.
+function missingRun(id, status, body) {
+  const gone = status === 404 || status === 410;
+  const at = new Date(id);
+  const title = status === 0 ? "Serveur injoignable" : gone ? "Rapport introuvable" : `Rapport indisponible (HTTP ${status})`;
+  const why = status === 0 ? "Le rapport n'a pas pu être chargé : le serveur ne répond pas."
+    : !gone ? "Le serveur n'a pas rendu ce rapport."
+    : isNaN(at) ? "Ce lien ne désigne aucun run."
+    : `Le run du ${esc(fmtTime(at))} n'est pas, ou plus, dans l'historique : purgé, ou perdu lors d'un redéploiement.`;
+  const near = status === 0 ? null : nearestRun(id, body);
+  const offer = near ? `
+      <a class="near" href="#run=${esc(encodeURIComponent(near.run.id))}">
+        <span class="k">${esc(near.label)}</span>
+        ${near.run.verdict ? pill(near.run.verdict) : ""}
+        <time>${esc(fmtTime(near.run.generated_at || near.run.id))}</time>
+        ${near.gap !== undefined ? `<span class="gap">${esc(gapText(near.gap))}</span>` : ""}
+      </a>`
+    : gone ? `<p class="why">L'historique est vide pour l'instant.</p>` : "";
+  return `
+    <div class="missing" role="status">
+      <h2>${esc(title)}</h2>
+      <p class="why">${why}</p>
+      <code>${esc(id)}</code>
+      ${offer}
+    </div>`;
+}
+
 // show paints one run's report. reveal scrolls it into view: a link, or a
 // tap on a card whose report is below it on a phone.
 async function show(id, reveal) {
@@ -470,11 +538,18 @@ async function show(id, reveal) {
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
     el.classList.toggle("selected", el.dataset.id === id));
 
-  const resp = await fetch("api/runs/" + encodeURIComponent(id));
+  let resp = null, body = null;
+  try {
+    resp = await fetch("api/runs/" + encodeURIComponent(id));
+    body = await resp.json().catch(() => null); // a plain-text 404 has no JSON
+  } catch (e) { /* unreachable: resp stays null */ }
   if (seq !== showSeq) return; // a later link or click won the race
-  if (!resp.ok) return;
-  const { report: r } = await resp.json();
-  if (seq !== showSeq) return;
+  if (!resp || !resp.ok || !body || !body.report) {
+    detailEl.innerHTML = missingRun(id, resp ? resp.status : 0, body);
+    if (reveal) revealDetail();
+    return;
+  }
+  const r = body.report;
 
   const findingsRows = (r.findings || []).map(f => `
     <tr>
@@ -510,7 +585,7 @@ async function show(id, reveal) {
     <div class="item"><div class="k">status</div><div class="v ${l.error ? "fail" : ""}">${esc(l.error || "ok")}</div></div>`
     : `<div class="item"><div class="k">llm</div><div class="v disabled">disabled for this run</div></div>`;
 
-  document.getElementById("detail").innerHTML = `
+  detailEl.innerHTML = `
     <div class="detail-head">
       <div>
         <h2>${esc(r.title)}</h2>
