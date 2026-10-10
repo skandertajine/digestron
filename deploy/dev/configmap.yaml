@@ -27,7 +27,7 @@ data:
 
     schedule:
       cron: "5 * * * *"
-      timezone: "Europe/Paris"
+      timezone: "Europe/London"
 
     metrics:
       listen: ":9090"
