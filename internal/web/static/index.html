@@ -576,11 +576,14 @@ async function show(id, reveal) {
     </div>`).join("") || `<div style="color:var(--muted-2);font-size:.8rem">none</div>`;
 
   const l = r.llm || {};
-  // model_digest is the weights the server actually ran, which an alias can
-  // hide (qwen3.5:9b answering with a 4B). Older runs do not have it.
+  // model_digest and model_size are the weights the server actually ran,
+  // which an alias can hide (qwen3.5:9b answering with a 4.7B). Older runs
+  // do not have them.
   const digest = typeof l.model_digest === "string" ? l.model_digest.replace(/^sha256:/, "") : "";
-  const served = digest
-    ? `<div class="item"><div class="k">served digest</div><div class="v" title="${esc(l.model_digest)}">${esc(digest.slice(0, 12))}</div></div>`
+  const size = typeof l.model_size === "string" ? l.model_size : "";
+  const servedText = [size, digest.slice(0, 12)].filter(Boolean).join(" · ");
+  const served = servedText
+    ? `<div class="item"><div class="k">served</div><div class="v"${digest ? ` title="${esc(l.model_digest)}"` : ""}>${esc(servedText)}</div></div>`
     : "";
   const llmBar = l.provider ? `
     <div class="item"><div class="k">provider</div><div class="v">${esc(l.provider)}</div></div>
