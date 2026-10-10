@@ -70,7 +70,15 @@
   .sidebar-head svg.spark { display: block; margin-top: .6rem; width: 100%; height: 28px; }
 
   .run-list { max-height: calc(100vh - 220px); overflow-y: auto; padding: .6rem; display: flex; flex-direction: column; gap: .45rem; }
-  @media (max-width: 960px) { .run-list { max-height: 46vh; } }
+  .list-toggle { display: none; font: 600 .7rem/1 var(--mono); color: var(--accent2); background: none; border: 1px solid var(--border); border-radius: 999px; padding: .4rem .7rem; margin-top: .6rem; cursor: pointer; }
+  /* One column: the run list sits above the report, so a phone opened from a
+     notification folds it away and the report comes first. */
+  @media (max-width: 960px) {
+    .run-list { max-height: 46vh; }
+    .list-toggle { display: inline-block; }
+    .sidebar.collapsed .run-list, .sidebar.collapsed svg.spark { display: none; }
+    .sidebar.collapsed .sidebar-head { border-bottom: 0; }
+  }
 
   .run-card {
     position: relative; cursor: pointer; padding: .7rem .8rem .7rem 1rem; border-radius: var(--radius-sm);
@@ -103,7 +111,7 @@
   .pill.critical { color: var(--critical); background: rgba(244,63,94,.14); }
   .pill.ok { color: var(--ok); background: rgba(16,185,129,.14); }
 
-  .detail { position: sticky; top: 5.2rem; padding: 1.4rem 1.5rem 1.6rem; min-height: 300px; }
+  .detail { position: sticky; top: 5.2rem; padding: 1.4rem 1.5rem 1.6rem; min-height: 300px; scroll-margin-top: 5.5rem; }
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem; padding: 4rem 1rem; color: var(--muted-2); text-align: center; }
   .empty svg { opacity: .5; }
 
@@ -282,13 +290,14 @@
 </section>
 
 <main class="app">
-  <section class="panel">
+  <section class="panel sidebar" id="sidebar">
     <div class="sidebar-head">
       <div class="totals">
         <div class="count" id="run-count">0<small>runs kept</small></div>
         <div class="tokens" id="token-total">0 tokens</div>
       </div>
       <svg class="spark" id="spark" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
+      <button type="button" class="list-toggle" id="list-toggle" aria-controls="runs" aria-expanded="true">masquer la liste</button>
     </div>
     <div id="runs" class="run-list"></div>
   </section>
@@ -336,6 +345,11 @@ const nsToMs = n => Math.round((n || 0) / 1e6);
 const fmtTime = d => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 let selected = null;
 let lastRuns = [];
+let showSeq = 0; // bumped by every show(): only the latest one may paint the report
+const headerEl = document.querySelector("header");
+const detailEl = document.getElementById("detail");
+const sidebarEl = document.getElementById("sidebar");
+const listToggle = document.getElementById("list-toggle");
 
 function sparkline(points) {
   if (points.length < 2) return "";
@@ -395,7 +409,7 @@ async function refresh() {
   document.getElementById("spark").innerHTML = sparkline(series);
 
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
-    el.addEventListener("click", () => show(el.dataset.id)));
+    el.addEventListener("click", () => show(el.dataset.id, true)));
   document.querySelectorAll(".logs-link[data-run]").forEach(el =>
     el.addEventListener("click", ev => { ev.stopPropagation(); setLogRun(el.dataset.run, true); }));
 }
@@ -424,15 +438,43 @@ function actorsBlock(actors) {
   return `<h3 class="section">top IPs investigated</h3><div class="actors">${rows}</div>`;
 }
 
-async function show(id) {
+// revealDetail brings the report to the top of the screen, under the sticky
+// header. On a phone the report comes after the run list, below the fold: a
+// tap on a notification used to land on a list the reader had not come for.
+// A report already near the top (the desktop layout) is left where it is.
+function revealDetail() {
+  const head = headerEl.offsetHeight; // the header wraps on a narrow screen
+  const top = detailEl.getBoundingClientRect().top;
+  if (top >= head && top <= head + window.innerHeight / 4) return;
+  detailEl.style.scrollMarginTop = head + 12 + "px";
+  detailEl.scrollIntoView({ block: "start" });
+}
+
+function syncListToggle() {
+  const open = !sidebarEl.classList.contains("collapsed");
+  listToggle.setAttribute("aria-expanded", String(open));
+  listToggle.textContent = open ? "masquer la liste" : "voir les runs";
+}
+
+listToggle.addEventListener("click", () => {
+  sidebarEl.classList.toggle("collapsed");
+  syncListToggle();
+});
+
+// show paints one run's report. reveal scrolls it into view: a link, or a
+// tap on a card whose report is below it on a phone.
+async function show(id, reveal) {
   if (location.hash !== "#run=" + id) history.replaceState(null, "", "#run=" + id);
+  const seq = ++showSeq;
   selected = id;
   document.querySelectorAll(".run-card[data-id]").forEach(el =>
     el.classList.toggle("selected", el.dataset.id === id));
 
   const resp = await fetch("api/runs/" + encodeURIComponent(id));
+  if (seq !== showSeq) return; // a later link or click won the race
   if (!resp.ok) return;
   const { report: r } = await resp.json();
+  if (seq !== showSeq) return;
 
   const findingsRows = (r.findings || []).map(f => `
     <tr>
@@ -497,7 +539,27 @@ async function show(id) {
     <h3 class="section">llm</h3>
     <div class="llm-bar">${llmBar}</div>
   `;
+  if (reveal) revealDetail();
 }
+
+// openFromHash opens the run a notification links to (#run=<id>), on load
+// and on every hashchange: a second notification tapped while the page is
+// open only changes the hash, and must still change the report shown. On a
+// phone the run list folds away so the report comes first; the desktop
+// layout ignores the fold.
+async function openFromHash() {
+  const m = location.hash.match(/^#run=(.+)$/);
+  if (!m) return;
+  let id = m[1];
+  try { id = decodeURIComponent(id); } catch (e) { /* a malformed escape: try it as written */ }
+  sidebarEl.classList.add("collapsed");
+  syncListToggle();
+  await show(id, true);
+}
+
+// The list is reloaded first: the run a fresh notification points to is
+// newer than the list this page loaded.
+window.addEventListener("hashchange", () => { refresh().catch(() => {}).then(openFromHash); });
 
 // Run now. The request returns at once; the run itself can take minutes, so
 // the page follows it through api/run until it ends, then reloads the list.
@@ -861,17 +923,16 @@ checkBtn.addEventListener("click", async () => {
   }
 });
 
-pollStatus();
+const firstStatus = pollStatus();
 setInterval(pollStatus, 5000);
 
 resetLogs();
 const logTimer = setInterval(pollLogs, 2000);
 
-refresh().then(() => {
-  // A notification links here as #run=<id>: open that run directly.
-  const m = location.hash.match(/^#run=(.+)$/);
-  if (m) show(decodeURIComponent(m[1]));
-});
+// A notification links here as #run=<id>: open that run once the list and
+// the status strip are in, so neither grows above the report after it has
+// been scrolled to the top.
+Promise.allSettled([refresh(), firstStatus]).then(openFromHash);
 watchRun(); // the page may open while the hourly run is in flight
 setInterval(refresh, 30000);
 </script>
