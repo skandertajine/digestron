@@ -644,6 +644,7 @@ const dryBox = document.getElementById("dry");
 const flashEl = document.getElementById("flash");
 const phaseEl = document.getElementById("st-phase");
 let watching = false;
+let runState = { running: false }; // the last api/run answer, for the Stop button
 
 function flash(msg) {
   flashEl.textContent = msg;
@@ -651,6 +652,7 @@ function flash(msg) {
 }
 
 function renderStatus(s) {
+  runState = s;
   runBtn.disabled = !!s.running;
   cancelBtn.hidden = !s.running;
   if (s.running) {
@@ -665,7 +667,18 @@ function renderStatus(s) {
   }
 }
 
+// A scheduled run is the hourly digest itself: stopping it loses that hour,
+// and nothing replays it. A manual or test run costs one more press to
+// start again, so only the scheduled one asks first.
+function confirmStop(s) {
+  if (s.kind !== "schedule") return true;
+  const at = s.started_at ? new Date(s.started_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+  return confirm(`Arrêter le digest planifié${at ? " de " + at : ""} ?\n\n` +
+    "Aucune notification ne partira pour cette heure, et elle ne sera pas rejouée.");
+}
+
 cancelBtn.addEventListener("click", async () => {
+  if (!confirmStop(runState)) return;
   cancelBtn.disabled = true;
   try {
     const resp = await fetch("api/run", { method: "DELETE" });
