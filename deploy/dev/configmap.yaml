@@ -10,10 +10,20 @@ data:
       language: fr
       # top IP investiguees (facettes ES + rDNS/RDAP) et analysees par le LLM
       top_actors: 5
+      # Faits que le LLM ne peut pas deviner : sans eux il attribue le port
+      # 5000 a Home Assistant et propose de bloquer le noeud Scaleway.
       context: >
-        Homelab k3s deux noeuds expose sur Internet via un edge nginx sur un
-        Raspberry Pi : Home Assistant, Immich, Vaultwarden, ArgoCD, Grafana.
-        fail2ban protege l'edge, UFW le serveur principal.
+        Homelab k3s a trois noeuds ; ces trois noeuds et les flux entre eux
+        sont legitimes. 192.168.0.252 (skander-b850m) : control-plane en
+        Wi-Fi, protege par UFW ; Home Assistant (port 8123) et Frigate, les
+        cameras (port 5000), y tournent en hostNetwork et sont scrapes par
+        Prometheus. 192.168.0.213 (raspberrypi) : edge nginx public, protege
+        par fail2ban. 192.168.6.2 (em-gallant-kapitsa) : noeud Scaleway relie
+        par tunnel VPN, qui porte Elasticsearch, Prometheus et digestron.
+        Appareils du LAN : 192.168.0.27 = ampli Denon, 192.168.0.52 = pont
+        Philips Hue ; leurs reponses SSDP/UPnP (port source 1900) bloquees par
+        UFW sont benignes. Services exposes sur Internet via l'edge : Home
+        Assistant, Immich, Vaultwarden, ArgoCD, Grafana.
 
     schedule:
       cron: "5 * * * *"
