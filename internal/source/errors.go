@@ -58,14 +58,14 @@ func QueryErrors(total int, errs []error) error {
 	return fmt.Errorf("%d of %d queries failed: %s", len(errs), total, detail)
 }
 
-// truncate cuts s to at most max bytes, ellipsis included, without splitting a
+// truncate cuts s to at most limit bytes, ellipsis included, without splitting a
 // rune: a reader must be able to tell a full message from a clipped one.
-func truncate(s string, max int) string {
+func truncate(s string, limit int) string {
 	const ellipsis = "…"
-	if len(s) <= max {
+	if len(s) <= limit {
 		return s
 	}
-	cut := max - len(ellipsis)
+	cut := limit - len(ellipsis)
 	if cut < 0 {
 		cut = 0
 	}

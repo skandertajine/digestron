@@ -225,7 +225,7 @@ func TestCollectRefusesUntrustworthyCounts(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
@@ -252,7 +252,7 @@ func TestCollectRefusesUntrustworthyCounts(t *testing.T) {
 // The ordinary case must stay ordinary: a complete response says so, and an
 // older server that omits hits.total.relation is not treated as truncated.
 func TestCollectAcceptsCompleteResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"timed_out": false, "_shards": {"total": 1, "successful": 1, "failed": 0},
 			"hits": {"total": {"value": 7}}}`))
 	}))
