@@ -86,7 +86,7 @@ Do this analysis, in order:
    - pattern: port_scan (many destination ports, blocked by the firewall), ssh_bruteforce (sshd failures, usernames tried), web_login_bruteforce (failed logins on an application), web_vuln_scan (HTTP errors on probing paths such as /.env, /wp-login.php, /admin), bot_crawler (ordinary HTTP pages, crawler user agent), internal_device (internal=true and no attack sign), unclear.
    - threat: high if success is true or the IP targets a login with many attempts; medium for a targeted brute force or vulnerability scan; low for blocked port scans, crawlers and internal devices.
    - success: true only if the samples or facets show an accepted login or a 2xx answer on a login or admin URL. Otherwise false.
-3. campaign: if several actors share a network owner, a /24, the same targets or the same timing, describe the coordinated campaign in one sentence. Otherwise an empty string.
-4. actions: at most three short concrete actions the data justifies (ban an IP or a range, check a service). An empty list if nothing needs doing.
+
+Describe what the data shows; never recommend anything. No blocking, banning, firewall rule or check to perform, in any field: what to do is decided outside this analysis, by rules that know which addresses belong to the infrastructure.
 
 Write the text fields in %s. Reply with the JSON object only.`

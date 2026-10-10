@@ -4,6 +4,10 @@
 // failed. Either way it carries the sources that did not fully answer, and
 // the title is marked when they exist: a push notification on a locked phone
 // is often read as a title and nothing more.
+//
+// How it rings follows the verdict (HA companion app, iOS): a quiet hour is
+// delivered without sound and replaces the previous quiet one, a warning
+// rings, a critical breaks through Focus. See pushData.
 package homeassistant
 
 import (
@@ -113,12 +117,15 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 	if problems != "" {
 		verdict += "\u00b7PARTIAL"
 	}
+	data := pushData(r.Verdict, problems != "")
+	if link != "" {
+		data["url"] = link         // iOS
+		data["clickAction"] = link // Android
+	}
 	body := map[string]any{
 		"title":   fmt.Sprintf("[%s] %s", verdict, r.Title),
 		"message": message,
-	}
-	if link != "" {
-		body["data"] = map[string]any{"url": link, "clickAction": link}
+		"data":    data,
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -144,6 +151,41 @@ func (s *Sink) Send(ctx context.Context, r digest.Report) error {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// Every digest goes to one thread on the phone; quiet hours share one slot
+// in it.
+const (
+	pushGroup = "digestron"
+	infoTag   = "digestron-info"
+)
+
+// pushData sets how the notification is delivered, in the companion app's
+// keys: data.group (the iOS thread), data.tag (a later notification with the
+// same tag replaces this one) and data.push.interruption-level.
+//
+//   - INFO: passive (no sound, no screen wake) under a fixed tag, so the
+//     hourly all-clear stops ringing and stops piling up: the lock screen
+//     holds the latest one.
+//   - WARNING: active, and no tag: each one stays until it is read.
+//   - CRITICAL: time-sensitive, which gets through a Focus.
+//
+// A run that lost sources is not a quiet hour whatever its verdict, which
+// is computed from the findings that survived: it is delivered as active and
+// kept, or a silent [INFO·PARTIAL] would replace the last all-clear without
+// a sound while the digest is half blind.
+func pushData(verdict digest.Severity, incomplete bool) map[string]any {
+	data := map[string]any{"group": pushGroup}
+	level := "active"
+	switch {
+	case verdict == digest.SeverityCritical:
+		level = "time-sensitive"
+	case verdict == digest.SeverityInfo && !incomplete:
+		level = "passive"
+		data["tag"] = infoTag
+	}
+	data["push"] = map[string]any{"interruption-level": level}
+	return data
 }
 
 // Check probes the API root with the configured token.

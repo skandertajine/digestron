@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -79,7 +80,7 @@ func TestRunHappyPath(t *testing.T) {
 			{Source: fakeSource{name: "a", findings: []Finding{{Source: "a", Title: "t1", Count: 9, Severity: SeverityCritical}}}},
 		},
 		Sinks: []RunSink{{Sink: sink}},
-		LLM:   fakeLLM{resp: Response{Text: "trouble brewing", Model: "m1", PromptTokens: 10, CompletionTokens: 5}},
+		LLM:   fakeLLM{resp: Response{Text: `{"headline":"trouble brewing","actors":[]}`, Model: "m1", PromptTokens: 10, CompletionTokens: 5}},
 		Log:   quietLogger(),
 	}
 
@@ -411,10 +412,10 @@ func TestRunScrubsErrorsAndSummaryBeforeTheyEnterTheReport(t *testing.T) {
 
 	chatty := &Runner{
 		Title: "t", Window: time.Hour, Log: quietLogger(), Scrub: scrub, LLMTimeout: time.Second,
-		LLM: fakeLLM{resp: Response{Text: "all quiet, token " + secret, Model: "m"}},
+		LLM: fakeLLM{resp: Response{Text: `{"headline":"all quiet, token ` + secret + `","actors":[]}`, Model: "m"}},
 	}
-	if got := chatty.Run(context.Background()).Summary; strings.Contains(got, secret) {
-		t.Errorf("the summary carries the secret: %q", got)
+	if got := chatty.Run(context.Background()).Summary; strings.Contains(got, secret) || !strings.Contains(got, "<redacted>") {
+		t.Errorf("summary = %q, want the secret replaced and the rest kept", got)
 	}
 }
 
@@ -479,4 +480,23 @@ func (c *countingLLM) Name() string { return "counting" }
 func (c *countingLLM) Complete(context.Context, Request) (Response, error) {
 	c.calls.Add(1)
 	return Response{Text: "x", Model: "m"}, nil
+}
+
+// The report names the weights that answered, not only the alias asked for,
+// and stays silent about them when the provider cannot tell.
+func TestRunRecordsTheModelActuallyServed(t *testing.T) {
+	r := &Runner{Title: "t", Window: time.Hour, Log: quietLogger(),
+		LLM: fakeLLM{resp: Response{Text: "x", Model: "qwen3.5:9b", ModelDigest: "5b0d1a4e", ModelSize: "4.7B Q4_K_M"}}}
+	got := r.Run(context.Background()).LLM
+	if got.Model != "qwen3.5:9b" || got.ModelDigest != "5b0d1a4e" || got.ModelSize != "4.7B Q4_K_M" {
+		t.Errorf("llm stats = %+v", got)
+	}
+
+	raw, err := json.Marshal(LLMStats{Provider: "openai-compatible", Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "model_digest") || strings.Contains(string(raw), "model_size") {
+		t.Errorf("unknown identification must be omitted: %s", raw)
+	}
 }

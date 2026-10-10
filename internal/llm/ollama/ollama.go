@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/skandertajine/digestron/internal/config"
 	"github.com/skandertajine/digestron/internal/digest"
@@ -22,12 +25,25 @@ func init() {
 }
 
 type Config struct {
-	URL         string   `koanf:"url"`
-	Model       string   `koanf:"model"`
-	NumCtx      int      `koanf:"num_ctx"`
-	NumPredict  int      `koanf:"num_predict"`
-	KeepAlive   string   `koanf:"keep_alive"`
-	Temperature *float64 `koanf:"temperature"`
+	URL        string `koanf:"url"`
+	Model      string `koanf:"model"`
+	NumCtx     int    `koanf:"num_ctx"`
+	NumPredict int    `koanf:"num_predict"`
+	KeepAlive  string `koanf:"keep_alive"`
+
+	// Sampling options. Unset leaves the model's Modelfile value, often
+	// tuned for chat rather than for a factual report (a high temperature, a
+	// presence_penalty that pushes the model away from words it already
+	// used); set, the value is sent even when it is 0, which is how
+	// presence_penalty is switched off.
+	Temperature     *float64 `koanf:"temperature"`
+	TopP            *float64 `koanf:"top_p"`
+	PresencePenalty *float64 `koanf:"presence_penalty"`
+	// Seed fixes the sampler: the same request gets the same reply, so a
+	// replayed prompt is compared on what it says, not on the dice. (Each
+	// run's prompt still differs by its random fence token.)
+	Seed *int `koanf:"seed"`
+
 	// Think stays off unless asked for: on a reasoning model the trace eats
 	// num_predict before a single character of the digest is written.
 	Think bool `koanf:"think"`
@@ -35,7 +51,26 @@ type Config struct {
 
 type Client struct {
 	cfg Config
+
+	// served caches what the configured name resolves to on the server. A
+	// tag is an alias: "qwen3.5:9b" can point at a 4.7B build, and only the
+	// digest says which weights answered. The cache is short-lived so that a
+	// re-tag shows up on the next hourly run of a long-lived serve process.
+	mu     sync.Mutex
+	served servedModel
+	now    func() time.Time // nil = time.Now; tests move it
 }
+
+type servedModel struct {
+	digest string
+	size   string
+	at     time.Time
+}
+
+const (
+	servedModelTTL     = 5 * time.Minute
+	servedModelTimeout = 5 * time.Second
+)
 
 func New(settings map[string]any) (digest.LLM, error) {
 	cfg := Config{
@@ -44,7 +79,9 @@ func New(settings map[string]any) (digest.LLM, error) {
 		NumPredict: 2048, // the per-IP analysis runs to a few hundred words
 		KeepAlive:  "10m",
 	}
-	if err := config.DecodeSettings(settings, &cfg); err != nil {
+	// Strict: a misspelt sampling key would otherwise leave the Modelfile
+	// default in place without a word.
+	if err := config.DecodeSettingsStrict(settings, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Model == "" {
@@ -87,6 +124,15 @@ func (c *Client) Complete(ctx context.Context, req digest.Request) (digest.Respo
 	}
 	if c.cfg.Temperature != nil {
 		options["temperature"] = *c.cfg.Temperature
+	}
+	if c.cfg.TopP != nil {
+		options["top_p"] = *c.cfg.TopP
+	}
+	if c.cfg.PresencePenalty != nil {
+		options["presence_penalty"] = *c.cfg.PresencePenalty
+	}
+	if c.cfg.Seed != nil {
+		options["seed"] = *c.cfg.Seed
 	}
 	body, err := json.Marshal(chatRequest{
 		Model: c.cfg.Model,
@@ -145,38 +191,94 @@ func (c *Client) Complete(ctx context.Context, req digest.Request) (digest.Respo
 		return digest.Response{}, llm.ErrEmpty
 	}
 
+	served := c.servedModel(ctx)
 	return digest.Response{
 		Text:             out.Message.Content,
 		Model:            c.cfg.Model,
+		ModelDigest:      served.digest,
+		ModelSize:        served.size,
 		PromptTokens:     out.PromptEvalCount,
 		CompletionTokens: out.EvalCount,
 	}, nil
 }
 
-// Check verifies the server answers and knows the configured model.
-func (c *Client) Check(ctx context.Context) error {
+// servedModel looks up the digest and size behind the configured name. Best
+// effort: the reply is already in hand, so a failed lookup costs the
+// identification, never the digest.
+func (c *Client) servedModel(ctx context.Context) servedModel {
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.served.digest != "" && now().Sub(c.served.at) < servedModelTTL {
+		return c.served
+	}
+	lctx, cancel := context.WithTimeout(ctx, servedModelTimeout)
+	defer cancel()
+	models, err := c.listModels(lctx)
+	if err != nil {
+		return servedModel{}
+	}
+	for _, m := range models {
+		if sameModel(m.Name, c.cfg.Model) {
+			c.served = servedModel{
+				digest: m.Digest,
+				size:   strings.TrimSpace(m.Details.ParameterSize + " " + m.Details.QuantizationLevel),
+				at:     now(),
+			}
+			return c.served
+		}
+	}
+	return servedModel{}
+}
+
+type tagModel struct {
+	Name    string `json:"name"`
+	Digest  string `json:"digest"`
+	Details struct {
+		ParameterSize     string `json:"parameter_size"`
+		QuantizationLevel string `json:"quantization_level"`
+	} `json:"details"`
+}
+
+func (c *Client) listModels(ctx context.Context) ([]tagModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.URL+"/api/tags", nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := httpx.Do(req, 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ollama: %s", resp.Status)
+		return nil, fmt.Errorf("ollama: %s", resp.Status)
 	}
 	var tags struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
+		Models []tagModel `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return nil, err
+	}
+	return tags.Models, nil
+}
+
+// sameModel matches a listed name against the configured one; Ollama reads
+// a name without a tag as ":latest".
+func sameModel(listed, configured string) bool {
+	return listed == configured || (!strings.Contains(configured, ":") && listed == configured+":latest")
+}
+
+// Check verifies the server answers and knows the configured model.
+func (c *Client) Check(ctx context.Context) error {
+	models, err := c.listModels(ctx)
+	if err != nil {
 		return err
 	}
-	for _, m := range tags.Models {
-		if m.Name == c.cfg.Model {
+	for _, m := range models {
+		if sameModel(m.Name, c.cfg.Model) {
 			return nil
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skandertajine/digestron/internal/digest"
 )
@@ -228,5 +229,92 @@ func TestTeaserKeepsHeadlineAndIPLines(t *testing.T) {
 	want := "Headline.\n1. 1.2.3.4 | Net | 5 events\n2. 5.6.7.8 | Other | 2 events"
 	if got != want {
 		t.Errorf("Teaser =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// capture records the payload of each notification as generic JSON.
+func capture(t *testing.T) (*httptest.Server, func() map[string]any) {
+	t.Helper()
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		payload = nil
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("payload is not JSON: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() map[string]any { return payload }
+}
+
+// How each verdict reaches the phone, in the companion app's keys: a quiet
+// hour must neither ring nor pile up, a warning rings and stays, a critical
+// gets through a Focus. The link keeps opening the run on both platforms.
+func TestSendDeliveryFollowsTheVerdict(t *testing.T) {
+	at := time.Date(2026, 10, 10, 11, 5, 0, 0, time.UTC)
+	link := "http://digestron.example/#run=2026-10-10T11:05:00Z"
+	complete := []digest.SourceStats{{Source: "es", Findings: 5}}
+	partial := []digest.SourceStats{{Source: "es", Findings: 2, Err: "3 of 5 queries failed"}}
+
+	cases := []struct {
+		name    string
+		verdict digest.Severity
+		stats   []digest.SourceStats
+		level   string
+		tag     any // nil = no tag: the notification stays
+	}{
+		{"info", digest.SeverityInfo, complete, "passive", "digestron-info"},
+		{"warning", digest.SeverityWarning, complete, "active", nil},
+		{"critical", digest.SeverityCritical, complete, "time-sensitive", nil},
+		{"info, sources lost", digest.SeverityInfo, partial, "active", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, got := capture(t)
+			s := newSink(t, srv.URL, map[string]any{"link": "http://digestron.example/"})
+			r := digest.Report{Title: "Security digest [dev]", Verdict: tc.verdict, Summary: "Headline.",
+				Stats: tc.stats, GeneratedAt: at}
+			if err := s.Send(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+
+			data, ok := got()["data"].(map[string]any)
+			if !ok {
+				t.Fatalf("no data block: %v", got())
+			}
+			if data["group"] != "digestron" {
+				t.Errorf("data.group = %v", data["group"])
+			}
+			if data["tag"] != tc.tag {
+				t.Errorf("data.tag = %v, want %v", data["tag"], tc.tag)
+			}
+			push, _ := data["push"].(map[string]any)
+			if push["interruption-level"] != tc.level {
+				t.Errorf("data.push.interruption-level = %v, want %s", push["interruption-level"], tc.level)
+			}
+			if data["url"] != link || data["clickAction"] != link {
+				t.Errorf("url = %v, clickAction = %v, want both %s", data["url"], data["clickAction"], link)
+			}
+		})
+	}
+}
+
+// Without a link there is nothing to open, but the delivery level stays.
+func TestSendWithoutLinkStillSetsTheDeliveryLevel(t *testing.T) {
+	srv, got := capture(t)
+	if err := newSink(t, srv.URL, nil).Send(context.Background(),
+		digest.Report{Title: "digest", Verdict: digest.SeverityInfo}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := got()["data"].(map[string]any)
+	if _, ok := data["url"]; ok {
+		t.Errorf("url set without a link: %v", data)
+	}
+	if _, ok := data["clickAction"]; ok {
+		t.Errorf("clickAction set without a link: %v", data)
+	}
+	if push, _ := data["push"].(map[string]any); push["interruption-level"] != "passive" || data["tag"] != "digestron-info" {
+		t.Errorf("data = %v, want a passive, replaceable info", data)
 	}
 }

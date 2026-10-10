@@ -99,8 +99,13 @@ func (s SourceStats) Partial() bool { return s.Err != "" && s.Findings > 0 }
 
 // LLMStats records the summarization cost of one run.
 type LLMStats struct {
-	Provider         string        `json:"provider,omitempty"`
-	Model            string        `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"` // the name asked for
+	// ModelDigest and ModelSize identify the weights that actually answered,
+	// when the provider can tell: a model name is an alias the server may
+	// point at another build (e.g. "4.7B Q4_K_M" behind a "9b" tag).
+	ModelDigest      string        `json:"model_digest,omitempty"`
+	ModelSize        string        `json:"model_size,omitempty"`
 	PromptTokens     int           `json:"prompt_tokens,omitempty"`
 	CompletionTokens int           `json:"completion_tokens,omitempty"`
 	Duration         time.Duration `json:"duration,omitempty"`
@@ -120,7 +125,7 @@ type Report struct {
 	Title       string        `json:"title"`
 	Window      Window        `json:"window"`
 	Verdict     Severity      `json:"verdict"`
-	Summary     string        `json:"summary"` // LLM text; empty in degraded mode
+	Summary     string        `json:"summary"` // LLM analysis rendered by Go; empty in degraded mode
 	Findings    []Finding     `json:"findings"`
 	Actors      []Actor       `json:"actors,omitempty"`
 	Stats       []SourceStats `json:"stats"`
@@ -143,14 +148,19 @@ type Request struct {
 	User   string
 	// Schema, when set, is a JSON schema the reply must follow. Providers
 	// that support constrained output enforce it; the others get it only
-	// through the prompt, and the runner falls back to the raw text.
+	// through the prompt, and a reply that does not parse is not published
+	// (the digest goes out with its counters only).
 	Schema json.RawMessage
 }
 
 // Response is the LLM output with its token cost.
 type Response struct {
-	Text             string
-	Model            string
+	Text  string
+	Model string
+	// ModelDigest and ModelSize identify the weights behind Model, when the
+	// provider knows them; empty otherwise.
+	ModelDigest      string
+	ModelSize        string
 	PromptTokens     int
 	CompletionTokens int
 }

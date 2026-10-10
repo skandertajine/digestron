@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/skandertajine/digestron/internal/digest"
 	"github.com/skandertajine/digestron/internal/llm"
@@ -25,6 +28,10 @@ func newClient(t *testing.T, url string) digest.LLM {
 func TestCompleteRequestShape(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &got)
 		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"all quiet"},
@@ -127,6 +134,10 @@ func TestNewRequiresModel(t *testing.T) {
 func TestThinkIsOverridable(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &got)
 		_, _ = w.Write([]byte(`{"message":{"content":"all quiet"},"done_reason":"stop"}`))
@@ -142,5 +153,182 @@ func TestThinkIsOverridable(t *testing.T) {
 	}
 	if got["think"] != true {
 		t.Errorf("think = %v, want true when the operator asks for it", got["think"])
+	}
+}
+
+// The Modelfile's chat defaults (temperature 1, presence_penalty 1.5) are
+// what the operator overrides here; an explicit 0 must reach the server, or
+// presence_penalty can never be switched off.
+func TestSamplingOptionsAreSentWhenSet(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"},"done_reason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(map[string]any{"url": srv.URL, "model": "qwen3:8b",
+		"temperature": 0.2, "top_p": 0.8, "presence_penalty": 0, "seed": 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Complete(context.Background(), digest.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := got["options"].(map[string]any)
+	want := map[string]any{"temperature": 0.2, "top_p": 0.8, "presence_penalty": float64(0), "seed": float64(42)}
+	for k, v := range want {
+		if opts[k] != v {
+			t.Errorf("options.%s = %v, want %v", k, opts[k], v)
+		}
+	}
+}
+
+func TestSamplingOptionsLeftToTheModelfileWhenUnset(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"},"done_reason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	if _, err := newClient(t, srv.URL).Complete(context.Background(), digest.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := got["options"].(map[string]any)
+	for _, k := range []string{"temperature", "top_p", "presence_penalty", "seed"} {
+		if v, ok := opts[k]; ok {
+			t.Errorf("options.%s = %v sent although not configured", k, v)
+		}
+	}
+}
+
+// A misspelt key used to be dropped without a word, leaving the model on its
+// Modelfile default while the config claimed otherwise.
+func TestNewRejectsUnknownSettings(t *testing.T) {
+	_, err := New(map[string]any{"url": "http://x", "model": "qwen3:8b", "presence_penalt": 0})
+	if err == nil || !strings.Contains(err.Error(), "presence_penalt") {
+		t.Errorf("err = %v, want the unknown key named", err)
+	}
+}
+
+// fakeOllama answers /api/chat with a fixed reply and /api/tags with whatever
+// tags holds at the time of the call, counting the tags lookups.
+type fakeOllama struct {
+	mu        sync.Mutex
+	tags      string
+	tagsCalls int
+}
+
+func (f *fakeOllama) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/api/chat":
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"},"done_reason":"stop","prompt_eval_count":1,"eval_count":1}`))
+	case "/api/tags":
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.tagsCalls++
+		if f.tags == "" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(f.tags))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (f *fakeOllama) set(tags string) { f.mu.Lock(); f.tags = tags; f.mu.Unlock() }
+
+func (f *fakeOllama) calls() int { f.mu.Lock(); defer f.mu.Unlock(); return f.tagsCalls }
+
+const tagsAliasTo4B = `{"models":[
+	{"name":"qwen3:8b","digest":"aaaa","details":{"parameter_size":"8.2B","quantization_level":"Q4_K_M"}},
+	{"name":"qwen3.5:9b","digest":"5b0d1a4e","details":{"parameter_size":"4.7B","quantization_level":"Q4_K_M"}}]}`
+
+// The name in the config is an alias: "qwen3.5:9b" served a 4.7B build. The
+// run records the digest and size the server reports for it, looked up once
+// and reused while fresh.
+func TestCompleteRecordsTheModelActuallyServed(t *testing.T) {
+	fake := &fakeOllama{tags: tagsAliasTo4B}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	c, err := New(map[string]any{"url": srv.URL, "model": "qwen3.5:9b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2026, 10, 10, 10, 5, 0, 0, time.UTC)
+	c.(*Client).now = func() time.Time { return clock }
+
+	for range 2 {
+		resp, err := c.Complete(context.Background(), digest.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Model != "qwen3.5:9b" || resp.ModelDigest != "5b0d1a4e" || resp.ModelSize != "4.7B Q4_K_M" {
+			t.Errorf("resp = %+v, want the alias, its digest and the size it really is", resp)
+		}
+	}
+	if fake.calls() != 1 {
+		t.Errorf("/api/tags called %d times, want 1: the lookup is cached", fake.calls())
+	}
+
+	// Re-tagged while a serve process keeps running: the next hourly run
+	// must name the new weights, not the cached ones.
+	fake.set(`{"models":[{"name":"qwen3.5:9b","digest":"9e9e","details":{"parameter_size":"9.1B","quantization_level":"Q4_K_M"}}]}`)
+	clock = clock.Add(time.Hour)
+	resp, err := c.Complete(context.Background(), digest.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ModelDigest != "9e9e" || resp.ModelSize != "9.1B Q4_K_M" {
+		t.Errorf("after a re-tag: resp = %+v", resp)
+	}
+}
+
+// The lookup is best effort: the reply is already in hand.
+func TestServedModelLookupFailureKeepsTheReply(t *testing.T) {
+	fake := &fakeOllama{} // /api/tags answers 500
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	resp, err := newClient(t, srv.URL).Complete(context.Background(), digest.Request{})
+	if err != nil {
+		t.Fatalf("a failed /api/tags must not fail the completion: %v", err)
+	}
+	if resp.Text != "ok" || resp.ModelDigest != "" || resp.ModelSize != "" {
+		t.Errorf("resp = %+v, want the reply and no identification", resp)
+	}
+
+	fake.set(tagsAliasTo4B)
+	if resp, _ := newClient(t, srv.URL).Complete(context.Background(), digest.Request{}); resp.ModelDigest != "aaaa" {
+		t.Errorf("model_digest = %q once /api/tags answers", resp.ModelDigest)
+	}
+}
+
+func TestSameModelReadsAMissingTagAsLatest(t *testing.T) {
+	for _, tc := range []struct {
+		listed, configured string
+		want               bool
+	}{
+		{"qwen3:8b", "qwen3:8b", true},
+		{"llama3:latest", "llama3", true},
+		{"llama3:8b", "llama3", false},
+		{"qwen3:8b", "qwen3:4b", false},
+	} {
+		if got := sameModel(tc.listed, tc.configured); got != tc.want {
+			t.Errorf("sameModel(%q, %q) = %v", tc.listed, tc.configured, got)
+		}
 	}
 }
