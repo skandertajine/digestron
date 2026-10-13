@@ -25,8 +25,9 @@ data:
         UFW sont benignes. Services exposes sur Internet via l'edge : Home
         Assistant, Immich, Vaultwarden, ArgoCD, Grafana.
 
+    # a la demande (bouton Run now / POST /api/run) ; serve exige un cron, d ou un tir annuel
     schedule:
-      cron: "5 * * * *"
+      cron: "0 5 1 1 *"
       timezone: "Europe/London"
 
     metrics:
