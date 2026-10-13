@@ -81,7 +81,7 @@ data:
       timeout: 300s
       settings:
         url: http://192.168.0.156:9401
-        model: qwen3.5:9b
+        model: qwen3.5:4b
         num_ctx: 16384
         keep_alive: -1m
         # echantillonnage pour un rapport factuel et rejouable, au lieu des
