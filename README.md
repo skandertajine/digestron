@@ -66,8 +66,8 @@ replayed as soon as the dry run ends, because a dry run delivers nothing.
 From a shell, the API defaults to dry as well:
 
 ```
-curl -X POST 'http://digestron-dev.home/api/run'          # dry: sources + LLM, no sinks
-curl -X POST 'http://digestron-dev.home/api/run?dry=0'    # delivered, recorded
+curl -X POST 'https://digestron-dev.lab.isklouder.com/api/run'          # dry: sources + LLM, no sinks
+curl -X POST 'https://digestron-dev.lab.isklouder.com/api/run?dry=0'    # delivered, recorded
 ```
 
 ### Process log in the UI
