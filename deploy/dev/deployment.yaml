@@ -32,7 +32,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: digestron
-          image: ghcr.io/skandertajine/digestron:dev-0f8c40b
+          image: ghcr.io/skandertajine/digestron:dev-fbcf6bb
           args: ["serve", "-config", "/etc/digestron/config.yaml"]
           ports:
             - containerPort: 9090
