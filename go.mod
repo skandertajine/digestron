@@ -1,6 +1,6 @@
 module github.com/skandertajine/digestron
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/go-co-op/gocron/v2 v2.22.0
